@@ -15,7 +15,10 @@ export function initLog(file: string, opts?: { quiet?: boolean }): void {
 }
 
 function fmt(level: string, tag: string, msg: string): string {
-  const ts = new Date().toISOString().slice(5, 19).replace("T", " ");
+  // local time — the user reads these logs (toISOString would be UTC)
+  const d = new Date();
+  const p = (n: number): string => String(n).padStart(2, "0");
+  const ts = `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
   return `${ts} ${level.padEnd(5)} [${tag}] ${msg}`;
 }
 
