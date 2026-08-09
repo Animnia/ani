@@ -54,6 +54,7 @@ async function makeRouter(streamFn: StreamFn, files: ReturnType<typeof tmpFiles>
     streamFn,
     skipChannels: true,
     pairOpts: { pendingFile: files.pendingFile, configFile: files.configFile },
+    stateDir: files.dir, // never write sessions/chats into the real data dir
   });
   const channel = new FakeChannel();
   router.registerChannel(channel);

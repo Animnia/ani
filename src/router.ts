@@ -5,6 +5,7 @@
  * cron delivery, MCP tool wiring, the messaging bridge.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { loadConfig, PATHS, watchConfig, type Config } from "./core/config.ts";
 import { approveCode, loadPending, PAIR_RENOTIFY, savePending, upsertPending } from "./core/pairing.ts";
 import { sweepDataDirs } from "./core/janitor.ts";
@@ -49,12 +50,21 @@ export class Router implements MessagingBridge {
   private pairOpts?: { pendingFile?: string; configFile?: string };
 
   /** opts are test hooks: inject a fake streamFn / skip real channel startup /
-   *  redirect pairing files */
-  async init(opts?: { streamFn?: StreamFn; skipChannels?: boolean; pairOpts?: { pendingFile?: string; configFile?: string } }): Promise<void> {
+   *  redirect pairing files / redirect state (sessions, chats) — tests must
+   *  never write into the real data/ dir */
+  async init(opts?: {
+    streamFn?: StreamFn;
+    skipChannels?: boolean;
+    pairOpts?: { pendingFile?: string; configFile?: string };
+    stateDir?: string;
+  }): Promise<void> {
     this.pairOpts = opts?.pairOpts;
+    if (opts?.stateDir) {
+      this.chatsFile = join(opts.stateDir, "chats.json");
+    }
     this.cfg = loadConfig();
     mkdirSync(PATHS.data, { recursive: true });
-    sweepDataDirs(); // old inbox/screenshots/shell-output cleanup; never throws hard
+    if (!opts?.stateDir) sweepDataDirs(); // skip janitor under redirected state (tests)
     if (!opts?.streamFn && !this.cfg.deepseek.apiKey) throw new Error("deepseek.apiKey not set in ani.json");
     this.streamFn =
       opts?.streamFn ??
@@ -63,7 +73,7 @@ export class Router implements MessagingBridge {
         baseUrl: this.cfg.deepseek.baseUrl,
         thinking: this.cfg.thinking,
       });
-    this.sessions = new SessionStore(PATHS.sessions, this.cfg.maxContextChars);
+    this.sessions = new SessionStore(opts?.stateDir ? join(opts.stateDir, "sessions") : PATHS.sessions, this.cfg.maxContextChars);
     this.loadChats();
 
     // tools: static set + cron + messaging + MCP
