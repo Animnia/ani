@@ -47,14 +47,16 @@ function Install-Node {
   Say "downloading official Node $MinMajor zip…"
   # resolve the exact zip from SHASUMS256.txt inside latest-vN.x (index.json
   # lists newer majors first — do NOT use it for version resolution)
-  $sums = (Invoke-WebRequest -Uri "$Mirror/latest-v$MinMajor.x/SHASUMS256.txt" -TimeoutSec 30).Content
+  # -UseBasicParsing: PS 5.1's default IE DOM parser throws NullReferenceException
+  # on machines without IE (Windows 11) — always use basic parsing
+  $sums = (Invoke-WebRequest -UseBasicParsing -Uri "$Mirror/latest-v$MinMajor.x/SHASUMS256.txt" -TimeoutSec 30).Content
   $zip = (($sums -split "`n" | ForEach-Object { ($_ -split '\s+')[-1] }) | Where-Object { $_ -match "node-v[0-9.]+-win-x64\.zip$" } | Select-Object -First 1)
   if (-not $zip) { Die "could not resolve Node $MinMajor zip from $Mirror" }
   $url = "$Mirror/latest-v$MinMajor.x/$zip"
   Say "fetching $url"
   New-Item -ItemType Directory -Force -Path $AniDir | Out-Null
   $tmp = Join-Path $AniDir 'node.zip'
-  Invoke-WebRequest -Uri $url -OutFile $tmp -TimeoutSec 600
+  Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $tmp -TimeoutSec 600
   $extract = Join-Path $AniDir ($zip -replace '\.zip$','')
   Expand-Archive -Path $tmp -DestinationPath $AniDir -Force
   Remove-Item $tmp -Force
@@ -62,6 +64,7 @@ function Install-Node {
   if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
   Rename-Item $extract $dest
   $env:Path = "$dest;" + $env:Path
+  $ver = (& (Join-Path $dest 'node.exe') --version)
   Say "node $ver installed to $dest"
 }
 
@@ -100,12 +103,12 @@ if ((Test-Path $gitDir) -and (Get-Command git -ErrorAction SilentlyContinue)) {
   & git -C $AniDir remote add origin "$Repo.git"
   & git -C $AniDir fetch --depth 1 origin main -q
   & git -C $AniDir checkout -qf -t origin/main
-  if ($LASTEXITCODE -ne 0) { Die "git fetch/checkout failed" }
+  if ($LASTEXITCODE -ne 0) { Die "git fetch/checkout failed — behind a proxy? set HTTPS_PROXY first (e.g. `$env:HTTPS_PROXY='http://127.0.0.1:7890'`)" }
 } else {
   Say "git not found — downloading zip…"
   $zipUrl = 'https://codeload.github.com/Animnia/ani/zip/refs/heads/main'
   $tmpZip = Join-Path $AniDir 'ani.zip'
-  Invoke-WebRequest -Uri $zipUrl -OutFile $tmpZip -TimeoutSec 600
+  Invoke-WebRequest -UseBasicParsing -Uri $zipUrl -OutFile $tmpZip -TimeoutSec 600
   $tmpDir = Join-Path $AniDir '.dl'
   if (Test-Path $tmpDir) { Remove-Item $tmpDir -Recurse -Force }
   Expand-Archive -Path $tmpZip -DestinationPath $tmpDir
