@@ -14,7 +14,7 @@ import { hasLiveChannels, hasLiveCredentials, needs } from "./helpers.ts";
 const SKIP = needs(hasLiveCredentials() && hasLiveChannels(), "valid ani.json with live channels");
 
 test("ani boots, channels connect, CLI agent turn works", { timeout: 180_000, ...SKIP }, async () => {
-  const child = spawn("node", ["ani.ts"], {
+  const child = spawn(process.execPath, ["ani.ts"], {
     cwd: new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
     stdio: ["pipe", "pipe", "pipe"],
     env: { ...process.env },
@@ -68,7 +68,7 @@ test("daemon with no channels stays alive until signalled", { timeout: 60_000 },
     writeFileSync(join(dir, "ani.json"), JSON.stringify(cfg));
     copyFileSync(join(root, "PERSONA.md"), join(dir, "PERSONA.md"));
 
-    const child = spawn("node", [join(root, "ani.ts"), "--no-cli"], {
+    const child = spawn(process.execPath, [join(root, "ani.ts"), "--no-cli"], {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, ANI_CONFIG: join(dir, "ani.json") },
     });
