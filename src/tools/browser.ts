@@ -23,15 +23,31 @@ const tabConns = new Map<string, CdpConn>();
 let lastTabId: string | null = null;
 
 function findBrowserExe(): string | null {
-  const candidates = [
-    process.env["PROGRAMFILES"] + "\\Google\\Chrome\\Application\\chrome.exe",
-    process.env["PROGRAMFILES(X86)"] + "\\Google\\Chrome\\Application\\chrome.exe",
-    process.env["LOCALAPPDATA"] + "\\Google\\Chrome\\Application\\chrome.exe",
-    process.env["PROGRAMFILES"] + "\\Microsoft\\Edge\\Application\\msedge.exe",
-    process.env["PROGRAMFILES(X86)"] + "\\Microsoft\\Edge\\Application\\msedge.exe",
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-  ];
+  const candidates: string[] = [];
+  if (process.platform === "win32") {
+    candidates.push(
+      process.env["PROGRAMFILES"] + "\\Google\\Chrome\\Application\\chrome.exe",
+      process.env["PROGRAMFILES(X86)"] + "\\Google\\Chrome\\Application\\chrome.exe",
+      process.env["LOCALAPPDATA"] + "\\Google\\Chrome\\Application\\chrome.exe",
+      process.env["PROGRAMFILES"] + "\\Microsoft\\Edge\\Application\\msedge.exe",
+      process.env["PROGRAMFILES(X86)"] + "\\Microsoft\\Edge\\Application\\msedge.exe",
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    );
+  } else if (process.platform === "darwin") {
+    candidates.push(
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+      "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    );
+  } else {
+    // linux: search PATH for common binary names
+    for (const name of ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "microsoft-edge"]) {
+      for (const dir of (process.env.PATH ?? "").split(":")) {
+        if (dir) candidates.push(join(dir, name));
+      }
+    }
+  }
   for (const c of candidates) {
     try {
       if (c && existsSync(c)) return c;
@@ -67,8 +83,13 @@ async function ensureBrowser(): Promise<void> {
       "--disable-blink-features=AutomationControlled",
       "--disable-session-crashed-bubble",
       "--start-maximized",
+      // headless servers (no X display) need this to run at all;
+      // on desktops we stay headed — real windows look human to anti-bot
+      ...(process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY
+        ? ["--headless=new", "--no-sandbox", "--disable-gpu"]
+        : []),
     ],
-    { detached: true, stdio: "ignore", windowsHide: false },
+    { detached: true, stdio: "ignore", windowsHide: process.platform !== "win32" },
   );
   browserProc.unref();
   const deadline = Date.now() + 15_000;

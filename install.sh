@@ -47,9 +47,10 @@ install_node() {
     *)             die "unsupported arch: $(uname -m)" ;;
   esac
   say "node >= $MIN_MAJOR not found — downloading official binary ($os-$arch)…"
-  version="$(curl -fsSL --max-time 30 "$MIRROR/index.json" | grep -o '"version":"v2[4-9][^"]*"' | head -1 | cut -d'"' -f4)"
-  [ -n "$version" ] || die "could not resolve latest Node $MIN_MAJOR version from $MIRROR"
-  tarball="node-${version}-${os}-${arch}.tar.xz"
+  # resolve the exact tarball from SHASUMS256.txt inside latest-vN.x (index.json
+  # lists newer majors first — do NOT use it for version resolution)
+  tarball="$(curl -fsSL --max-time 30 "$MIRROR/latest-v${MIN_MAJOR}.x/SHASUMS256.txt" | awk '{print $2}' | grep -E "node-v[0-9.]+-${os}-${arch}\.tar\.xz$" | head -1)"
+  [ -n "$tarball" ] || die "could not resolve Node $MIN_MAJOR tarball from $MIRROR"
   url="$MIRROR/latest-v${MIN_MAJOR}.x/${tarball}"
   say "fetching $url"
   mkdir -p "$ANI_DIR"
@@ -58,8 +59,8 @@ install_node() {
   tar -xJf "$ANI_DIR/node.tar.xz" -C "$ANI_DIR" || die "tar extract failed (need xz support)"
   rm -f "$ANI_DIR/node.tar.xz"
   rm -rf "$ANI_DIR/node"
-  mv "$ANI_DIR/node-${version}-${os}-${arch}" "$ANI_DIR/node"
-  say "node $version installed to $ANI_DIR/node"
+  mv "$ANI_DIR/${tarball%.tar.xz}" "$ANI_DIR/node"
+  say "node installed to $ANI_DIR/node"
 }
 
 say "=== ani installer ==="

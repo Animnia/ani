@@ -1,7 +1,7 @@
 /**
  * shell tool — full machine control, pi-style: one tool, a command string,
- * a timeout. Output is truncated to keep context lean; full output goes to a
- * temp file when huge.
+ * a timeout. Cross-platform: cmd.exe on Windows, sh elsewhere. Output is
+ * truncated to keep context lean; full output goes to a temp file when huge.
  */
 import { spawn } from "node:child_process";
 import { writeFileSync, mkdirSync } from "node:fs";
@@ -11,11 +11,32 @@ import type { ToolDef } from "../core/types.ts";
 
 const MAX_OUT = 30_000; // chars returned inline
 const DEFAULT_TIMEOUT_SEC = 120;
+const IS_WIN = process.platform === "win32";
+
+/** Kill a process tree. Windows: taskkill /t. POSIX: we spawned with a new
+ *  process group (detached), so kill the whole group. */
+function killTree(pid: number | undefined): void {
+  if (!pid) return;
+  if (IS_WIN) {
+    spawn("taskkill", ["/pid", String(pid), "/f", "/t"], { windowsHide: true });
+  } else {
+    try {
+      process.kill(-pid, "SIGKILL"); // negative pid = process group
+    } catch {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        /* already dead */
+      }
+    }
+  }
+}
 
 export const shellTool: ToolDef = {
   name: "shell",
-  description:
-    "Run a shell command on this Windows machine and return stdout+stderr. Use cmd syntax by default, or call powershell explicitly (`powershell -NoProfile -Command \"...\"`). You have full control of the machine. Always set a timeout for long-running commands.",
+  description: IS_WIN
+    ? "Run a shell command on this Windows machine and return stdout+stderr. Use cmd syntax by default, or call powershell explicitly (`powershell -NoProfile -Command \"...\"`). You have full control of the machine. Always set a timeout for long-running commands."
+    : "Run a shell command on this machine and return stdout+stderr (sh -c syntax; call bash explicitly for bashisms). You have full control of the machine. Always set a timeout for long-running commands.",
   parameters: {
     type: "object",
     properties: {
@@ -32,11 +53,9 @@ export const shellTool: ToolDef = {
     const cwd = typeof args.cwd === "string" && args.cwd.trim() ? args.cwd : ctx.cwd;
 
     return new Promise((resolve) => {
-      const child = spawn("cmd.exe", ["/d", "/s", "/c", command], {
-        cwd,
-        windowsHide: true,
-        env: process.env,
-      });
+      const child = IS_WIN
+        ? spawn("cmd.exe", ["/d", "/s", "/c", command], { cwd, windowsHide: true, env: process.env })
+        : spawn("sh", ["-c", command], { cwd, env: process.env, detached: true }); // detached: own process group for killTree
       let out = Buffer.alloc(0);
       let killed = false;
       const onData = (chunk: Buffer) => {
@@ -51,13 +70,12 @@ export const shellTool: ToolDef = {
 
       const timer = setTimeout(() => {
         killed = true;
-        // taskkill the tree — child.kill alone leaves grandchildren
-        spawn("taskkill", ["/pid", String(child.pid), "/f", "/t"], { windowsHide: true });
+        killTree(child.pid); // child.kill alone leaves grandchildren
       }, timeoutSec * 1000);
 
       const abort = () => {
         killed = true;
-        spawn("taskkill", ["/pid", String(child.pid), "/f", "/t"], { windowsHide: true });
+        killTree(child.pid);
       };
       ctx.signal?.addEventListener("abort", abort, { once: true });
 

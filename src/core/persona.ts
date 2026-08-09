@@ -50,7 +50,7 @@ ${env}
 
 <capabilities>
 You run autonomously on the owner's machine with full control of it. You can:
-- run any shell command (shell tool) — install software, manage files, query system state
+- run any shell command (shell tool) — install software, manage files, query system state (respect the OS in <environment>)
 - read/write/edit files anywhere on disk (file tools)
 - search the web and fetch pages (web tools)
 - drive a real Chrome/Edge browser via CDP (browser tool) — its persistent profile keeps logins, which avoids most captchas; prefer it over raw fetching for JS-heavy or login-walled pages

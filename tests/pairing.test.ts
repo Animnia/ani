@@ -69,13 +69,15 @@ test("approveCode moves user into config owners and clears pending", { timeout: 
 test("expired pending gets a fresh code", { timeout: 5000 }, () => {
   const t = tmp();
   try {
-    const p1 = upsertPending({ channel: "qq", userId: "u", chatId: "c" }, t.pendingFile);
+    upsertPending({ channel: "qq", userId: "u", chatId: "c" }, t.pendingFile);
     // age it beyond the TTL
+    const aged = Date.now() - 31 * 60_000;
     const list = loadPending(t.pendingFile);
-    list[0].createdAt = Date.now() - 31 * 60_000;
+    list[0].createdAt = aged;
     savePending(list, t.pendingFile);
     const p2 = upsertPending({ channel: "qq", userId: "u", chatId: "c" }, t.pendingFile);
-    assert.notEqual(p2.createdAt, p1.createdAt);
+    assert.ok(p2.createdAt > aged, "fresh record has a fresh timestamp");
+    assert.equal(loadPending(t.pendingFile).length, 1, "expired record replaced, not duplicated");
   } finally {
     t[Symbol.dispose]();
   }

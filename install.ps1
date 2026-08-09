@@ -45,16 +45,17 @@ function Install-Node {
     } catch { Warn "winget failed: $_ — trying zip fallback" }
   }
   Say "downloading official Node $MinMajor zip…"
-  $index = Invoke-RestMethod -Uri "$Mirror/index.json" -TimeoutSec 30
-  $ver = ($index | Where-Object { $_.version -match '^v2[4-9]' } | Select-Object -First 1).version
-  if (-not $ver) { Die "could not resolve latest Node $MinMajor from $Mirror" }
-  $zip = "node-$ver-win-x64.zip"
+  # resolve the exact zip from SHASUMS256.txt inside latest-vN.x (index.json
+  # lists newer majors first — do NOT use it for version resolution)
+  $sums = (Invoke-WebRequest -Uri "$Mirror/latest-v$MinMajor.x/SHASUMS256.txt" -TimeoutSec 30).Content
+  $zip = (($sums -split "`n" | ForEach-Object { ($_ -split '\s+')[-1] }) | Where-Object { $_ -match "node-v[0-9.]+-win-x64\.zip$" } | Select-Object -First 1)
+  if (-not $zip) { Die "could not resolve Node $MinMajor zip from $Mirror" }
   $url = "$Mirror/latest-v$MinMajor.x/$zip"
   Say "fetching $url"
   New-Item -ItemType Directory -Force -Path $AniDir | Out-Null
   $tmp = Join-Path $AniDir 'node.zip'
   Invoke-WebRequest -Uri $url -OutFile $tmp -TimeoutSec 600
-  $extract = Join-Path $AniDir ('node-' + $ver + '-win-x64')
+  $extract = Join-Path $AniDir ($zip -replace '\.zip$','')
   Expand-Archive -Path $tmp -DestinationPath $AniDir -Force
   Remove-Item $tmp -Force
   $dest = Join-Path $AniDir 'node'

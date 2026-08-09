@@ -10,11 +10,18 @@ import { createDeepSeekStream } from "../src/core/deepseek.ts";
 import { loadConfig } from "../src/core/config.ts";
 import { httpRequest } from "../src/core/net.ts";
 import { webSearchTool, fetchUrlTool } from "../src/tools/web.ts";
+import { hasLiveCredentials, needs } from "./helpers.ts";
 
 const cfg = loadConfig();
 const ctx = { chatKey: "t:t", channel: "t", chatId: "t", cwd: process.cwd() };
+const live = hasLiveCredentials();
+const SKIP = needs(live, "valid deepseek.apiKey in ani.json");
+const tg = cfg.channels.telegram;
+const qq = cfg.channels.qq;
+const SKIP_TG = needs(Boolean(tg?.enabled && tg.token), "telegram channel configured");
+const SKIP_QQ = needs(Boolean(qq?.enabled && qq.appId), "qq channel configured");
 
-test("DeepSeek: streaming chat", { timeout: 60_000 }, async () => {
+test("DeepSeek: streaming chat", { timeout: 60_000, ...SKIP }, async () => {
   const stream = createDeepSeekStream({ apiKey: cfg.deepseek.apiKey, baseUrl: cfg.deepseek.baseUrl });
   let streamed = "";
   const res = await stream({
@@ -29,7 +36,7 @@ test("DeepSeek: streaming chat", { timeout: 60_000 }, async () => {
   assert.ok(res.usage && res.usage.prompt_tokens! > 0);
 });
 
-test("DeepSeek: tool call + reasoning round-trip (the 400 trap)", { timeout: 90_000 }, async () => {
+test("DeepSeek: tool call + reasoning round-trip (the 400 trap)", { timeout: 90_000, ...SKIP }, async () => {
   const stream = createDeepSeekStream({ apiKey: cfg.deepseek.apiKey, baseUrl: cfg.deepseek.baseUrl });
   const tools = [
     {
@@ -70,10 +77,9 @@ test("DeepSeek: tool call + reasoning round-trip (the 400 trap)", { timeout: 90_
   assert.ok(r2.content.length > 0, "model answered after tool result");
 });
 
-test("Telegram: getMe via proxy", { timeout: 30_000 }, async () => {
-  const tg = cfg.channels.telegram!;
-  const res = await httpRequest(`https://api.telegram.org/bot${tg.token}/getMe`, {
-    proxy: tg.useProxy ? cfg.proxy : undefined,
+test("Telegram: getMe via proxy", { timeout: 30_000, ...SKIP_TG }, async () => {
+  const res = await httpRequest(`https://api.telegram.org/bot${tg!.token}/getMe`, {
+    proxy: tg!.useProxy ? cfg.proxy : undefined,
     timeoutMs: 20_000,
   });
   const data = JSON.parse(res.body.toString("utf8"));
@@ -81,12 +87,11 @@ test("Telegram: getMe via proxy", { timeout: 30_000 }, async () => {
   assert.equal(data.result.is_bot, true);
 });
 
-test("QQ: token + gateway url", { timeout: 30_000 }, async () => {
-  const qq = cfg.channels.qq!;
+test("QQ: token + gateway url", { timeout: 30_000, ...SKIP_QQ }, async () => {
   const tokenRes = await httpRequest("https://bots.qq.com/app/getAppAccessToken", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ appId: qq.appId, clientSecret: qq.clientSecret }),
+    body: JSON.stringify({ appId: qq!.appId, clientSecret: qq!.clientSecret }),
     timeoutMs: 15_000,
   });
   const token = JSON.parse(tokenRes.body.toString("utf8")).access_token;
@@ -100,13 +105,13 @@ test("QQ: token + gateway url", { timeout: 30_000 }, async () => {
   assert.match(data.url, /^wss:\/\//);
 });
 
-test("web_search returns results", { timeout: 45_000 }, async () => {
+test("web_search returns results", { timeout: 45_000, ...needs(live, "network") }, async () => {
   const out = await webSearchTool.execute({ query: "DeepSeek V4 发布" }, ctx);
   assert.ok(!out.startsWith("Error"), out.slice(0, 300));
   assert.match(out, /http/);
 });
 
-test("fetch_url converts html to text", { timeout: 45_000 }, async () => {
+test("fetch_url converts html to text", { timeout: 45_000, ...needs(live, "network") }, async () => {
   const out = await fetchUrlTool.execute({ url: "https://example.com" }, ctx);
   assert.match(out, /Example Domain/);
 });

@@ -10,6 +10,7 @@ import { shellTool } from "../src/tools/shell.ts";
 import { editFileTool, grepTool, listDirTool, readFileTool, writeFileTool } from "../src/tools/files.ts";
 import { memoryReadTool, memorySearchTool, memoryWriteTool } from "../src/tools/memory.ts";
 import { PATHS } from "../src/core/config.ts";
+import { IS_WIN } from "./helpers.ts";
 
 const ctx = { chatKey: "t:t", channel: "t", chatId: "t", cwd: process.cwd() };
 
@@ -24,7 +25,8 @@ test("shell runs commands and reports exit codes", { timeout: 30_000 }, async ()
 
 test("shell timeout kills long commands", { timeout: 30_000 }, async () => {
   const start = Date.now();
-  const out = await shellTool.execute({ command: "ping -n 30 127.0.0.1 >nul", timeout: 2 }, ctx);
+  const sleeper = IS_WIN ? "ping -n 30 127.0.0.1 >nul" : "sleep 30";
+  const out = await shellTool.execute({ command: sleeper, timeout: 2 }, ctx);
   assert.ok(Date.now() - start < 15_000, "killed quickly");
   assert.match(out, /killed/);
 });

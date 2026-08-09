@@ -138,7 +138,7 @@ export const listDirTool: ToolDef = {
 
 export const grepTool: ToolDef = {
   name: "grep_files",
-  description: "Search file contents for a regex (Windows findstr under the hood). Returns matching lines with file:line prefix.",
+  description: "Search file contents for a regex (findstr on Windows, grep elsewhere). Returns matching lines with file:line prefix.",
   parameters: {
     type: "object",
     properties: {
@@ -157,10 +157,14 @@ export const grepTool: ToolDef = {
     const include = typeof args.include === "string" && args.include ? args.include : "*";
     const icase = args.ignoreCase !== false;
     const literal = args.literal === true;
-    // findstr: /S recursive, /N line numbers, /I ignore case, /R regex (or /L literal), /M files-with-matches is too coarse — use /N for lines
-    const fa = ["/S", "/N", ...(icase ? ["/I"] : []), literal ? "/L" : "/R", `/C:${pattern}`, join(p, include)];
+    const isWin = process.platform === "win32";
+    // Windows findstr: /S recursive /N line numbers /I icase /R regex (or /L literal)
+    // POSIX grep: -r recursive -n line numbers -i icase -E extended regex (or -F literal) --include mask
+    const [bin, fa] = isWin
+      ? ["findstr", ["/S", "/N", ...(icase ? ["/I"] : []), literal ? "/L" : "/R", `/C:${pattern}`, join(p, include)]]
+      : ["grep", ["-r", "-n", ...(icase ? ["-i"] : []), literal ? "-F" : "-E", `--include=${include}`, "--", pattern, p]];
     try {
-      const out = execFileSync("findstr", fa, { encoding: "utf8", maxBuffer: 4 * 1024 * 1024, timeout: 30_000 });
+      const out = execFileSync(bin, fa, { encoding: "utf8", maxBuffer: 4 * 1024 * 1024, timeout: 30_000 });
       const lines = out.split(/\r?\n/).filter(Boolean);
       const capped = lines.slice(0, 200);
       return capped.join("\n") + (lines.length > capped.length ? `\n[...${lines.length - capped.length} more matches]` : "");

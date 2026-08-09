@@ -38,24 +38,23 @@ export function savePending(list: PendingPair[], file = PATHS.pendingFile): void
   }
 }
 
-/** Find-or-create a pending pairing for this user. Returns the record. */
+/** Find-or-create a pending pairing for this user. Expired records are
+ *  replaced (never duplicated). Returns the live record. */
 export function upsertPending(
   input: { channel: string; userId: string; chatId: string; userName?: string },
   file = PATHS.pendingFile,
 ): PendingPair {
   const list = loadPending(file);
   const now = Date.now();
-  let p = list.find((x) => x.channel === input.channel && x.userId === input.userId);
-  if (!p || now - p.createdAt > PAIR_TTL) {
-    p = {
-      code: randomUUID().slice(0, 6).toUpperCase(),
-      ...input,
-      createdAt: now,
-      lastNotifiedAt: 0,
-    };
-    list.push(p);
-    savePending(list, file);
-  }
+  const existing = list.find((x) => x.channel === input.channel && x.userId === input.userId);
+  if (existing && now - existing.createdAt <= PAIR_TTL) return existing;
+  const p: PendingPair = {
+    code: randomUUID().slice(0, 6).toUpperCase(),
+    ...input,
+    createdAt: now,
+    lastNotifiedAt: 0,
+  };
+  savePending([...list.filter((x) => !(x.channel === input.channel && x.userId === input.userId)), p], file);
   return p;
 }
 
