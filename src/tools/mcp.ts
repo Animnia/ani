@@ -88,6 +88,18 @@ class StdioTransport extends McpTransport {
       } catch {
         continue;
       }
+      // server→client REQUEST (has method + id, e.g. roots/list, sampling):
+      // answer with MethodNotFound instead of leaving the server hanging
+      if ((msg as any).method && msg.id !== undefined) {
+        try {
+          this.child.stdin!.write(
+            JSON.stringify({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "ani does not serve client requests" } }) + "\n",
+          );
+        } catch {
+          /* dying */
+        }
+        continue;
+      }
       if (msg.id === undefined) continue; // notification — ignore
       const p = this.pending.get(msg.id);
       if (!p) continue;

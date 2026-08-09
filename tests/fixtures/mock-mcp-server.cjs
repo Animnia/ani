@@ -20,7 +20,11 @@ process.stdin.on("data", (chunk) => {
     if (msg.method === "initialize") {
       reply(msg.id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "mock", version: "1.0" } });
     } else if (msg.method === "notifications/initialized") {
-      // no reply
+      // probe the client with a server→client request; expect a -32601 error
+      // reply (not silence) — then surface the outcome via the add tool
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: 9999, method: "roots/list", params: {} }) + "\n");
+    } else if (msg.id === 9999) {
+      globalThis.__probeResult = msg.error ? `error:${msg.error.code}` : "unexpected-result";
     } else if (msg.method === "tools/list") {
       reply(msg.id, {
         tools: [
@@ -33,12 +37,19 @@ process.stdin.on("data", (chunk) => {
               required: ["a", "b"],
             },
           },
+          {
+            name: "probe_result",
+            description: "Report what the client replied to the roots/list probe",
+            inputSchema: { type: "object", properties: {} },
+          },
         ],
       });
     } else if (msg.method === "tools/call") {
       const { name, arguments: args } = msg.params ?? {};
       if (name === "add") {
         reply(msg.id, { content: [{ type: "text", text: String(Number(args.a) + Number(args.b)) }] });
+      } else if (name === "probe_result") {
+        reply(msg.id, { content: [{ type: "text", text: globalThis.__probeResult ?? "no-reply-received" }] });
       } else {
         reply(msg.id, { content: [{ type: "text", text: `unknown tool ${name}` }], isError: true });
       }

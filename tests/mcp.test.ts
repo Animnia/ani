@@ -15,7 +15,7 @@ test("MCP stdio: connect, list tools, call", { timeout: 30_000 }, async () => {
     const tools = await mgr.init({
       mock: { command: process.execPath, args: [FIXTURE], timeoutSec: 10 },
     });
-    assert.equal(tools.length, 1);
+    assert.equal(tools.length, 2);
     assert.equal(tools[0].name, "mcp_mock_add");
     assert.match(tools[0].description, /Add two numbers/);
 
@@ -24,6 +24,18 @@ test("MCP stdio: connect, list tools, call", { timeout: 30_000 }, async () => {
 
     const err = await tools[0].execute({ a: "x", b: 1 }, ctx);
     assert.equal(err, "NaN"); // server computes NaN — client passes it through
+
+    // the mock probed us with a server→client roots/list request on init;
+    // we must have replied with MethodNotFound (-32601), not silence
+    const probe = tools.find((t) => t.name === "mcp_mock_probe_result")!;
+    // give the async probe exchange a moment to complete
+    let probeOut = "";
+    for (let i = 0; i < 20; i++) {
+      probeOut = await probe.execute({}, ctx);
+      if (probeOut !== "no-reply-received") break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.equal(probeOut, "error:-32601", "client answered the server probe with MethodNotFound");
   } finally {
     mgr.close();
   }

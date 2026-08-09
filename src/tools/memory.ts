@@ -14,8 +14,15 @@ function ensureDir(): void {
   mkdirSync(join(PATHS.memory, "notes"), { recursive: true });
 }
 
+/** Local (not UTC!) YYYY-MM-DD — toISOString would put early-morning notes
+ *  into yesterday's file for users east of Greenwich (e.g. UTC+8 before 8am). */
+export function localDate(d = new Date()): string {
+  const p = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  return localDate();
 }
 
 export const memoryWriteTool: ToolDef = {

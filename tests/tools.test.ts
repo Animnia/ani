@@ -8,7 +8,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { shellTool } from "../src/tools/shell.ts";
 import { editFileTool, grepTool, listDirTool, readFileTool, writeFileTool } from "../src/tools/files.ts";
-import { memoryReadTool, memorySearchTool, memoryWriteTool } from "../src/tools/memory.ts";
+import { localDate, memoryReadTool, memorySearchTool, memoryWriteTool } from "../src/tools/memory.ts";
+
+test("localDate uses local calendar date, zero-padded", { timeout: 10_000 }, () => {
+  // 2026-04-10 23:30 UTC is already Apr 11 for users east of UTC+0:30 —
+  // localDate must agree with the LOCAL clock, whatever the host timezone
+  const edge = new Date("2026-04-10T23:30:00.000Z");
+  const expected = `${edge.getFullYear()}-${String(edge.getMonth() + 1).padStart(2, "0")}-${String(edge.getDate()).padStart(2, "0")}`;
+  assert.equal(localDate(edge), expected);
+  assert.match(localDate(new Date(0, 0, 5, 3, 4)), /^\d{4}-01-05$/, "zero-padded");
+});
 import { PATHS } from "../src/core/config.ts";
 import { IS_WIN } from "./helpers.ts";
 
