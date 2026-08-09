@@ -187,7 +187,7 @@ export class Router implements MessagingBridge {
       try {
         await channel.sendText(
           evt.chatId,
-          `我是 Ani，主人的私人 Agent。你还不是我的主人。\n如果这是主人的账号，让主人在 ani 终端输入:\n/approve ${p.code}`,
+          `我是 Ani，主人的私人 Agent。你还不是我的主人。\n如果这是主人的账号，让主人在装了 ani 的终端运行:\n  ani approve ${p.code}\n（或在 ani 的交互终端里输入 /approve ${p.code}）\n配对码 30 分钟内有效。`,
         );
       } catch (e) {
         warn("router", "pairing reply failed:", e);
