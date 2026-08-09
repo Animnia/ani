@@ -1,5 +1,7 @@
 # ani
 
+[![test](https://github.com/Animnia/ani/actions/workflows/test.yml/badge.svg)](https://github.com/Animnia/ani/actions/workflows/test.yml)
+
 一个极简的个人 Agent：**DeepSeek 大脑，QQ/Telegram 身体，pi 的灵魂**。
 
 - 零 npm 依赖 —— 只用 Node.js 24+ 内置能力（原生 TS、fetch、WebSocket、readline）
