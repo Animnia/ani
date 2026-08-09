@@ -107,6 +107,23 @@ async function main(): Promise<void> {
         execFileSync(process.platform === "win32" ? "del" : "rm", [tmp], { shell: true, stdio: "inherit" });
       }
       console.log("updated. restart ani to run the new version.");
+      // if a daemon is live, say so explicitly — easy to forget otherwise
+      try {
+        const lockFile = PATHS.data + "/ani.lock";
+        if (existsSync(lockFile)) {
+          const pid = Number((await import("node:fs")).readFileSync(lockFile, "utf8").trim());
+          if (pid) {
+            try {
+              process.kill(pid, 0);
+              console.log(`⚠️  a daemon is running (pid ${pid}) on the OLD code — restart it to apply.`);
+            } catch {
+              /* not actually running */
+            }
+          }
+        }
+      } catch {
+        /* best-effort hint only */
+      }
     } catch (e) {
       console.error(`update failed: ${e instanceof Error ? e.message : e}\ntry re-running the one-line installer instead.`);
       process.exit(1);
