@@ -8,15 +8,33 @@
  * owner's hand once; after that the site sees a returning human browser.
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PATHS } from "../core/config.ts";
 import { httpRequest } from "../core/net.ts";
 import { log } from "../core/log.ts";
 import type { ToolDef } from "../core/types.ts";
 
-const CDP_PORT = 9222;
-const CDP_BASE = `http://127.0.0.1:${CDP_PORT}`;
+/** CDP port is discovered, not fixed: Chrome launches with port=0 and writes
+ *  <profile>/DevToolsActivePort. A hardcoded 9222 would attach ani to ANY
+ *  Chrome answering there — including other tools' instances (wrong profile,
+ *  no login state, cross-tool interference). */
+let cdpPort: number | null = null;
+
+function cdpBase(): string {
+  if (!cdpPort) throw new Error("CDP port unknown — browser not started");
+  return `http://127.0.0.1:${cdpPort}`;
+}
+
+function readDevToolsPort(): number | null {
+  try {
+    const first = readFileSync(join(PATHS.browserProfile, "DevToolsActivePort"), "utf8").split("\n")[0].trim();
+    const n = Number(first);
+    return n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
 
 let browserProc: ChildProcess | null = null;
 const tabConns = new Map<string, CdpConn>();
@@ -58,9 +76,9 @@ function findBrowserExe(): string | null {
   return null;
 }
 
-async function cdpAlive(): Promise<boolean> {
+async function cdpAlive(port: number): Promise<boolean> {
   try {
-    const res = await httpRequest(`${CDP_BASE}/json/version`, { timeoutMs: 2000 });
+    const res = await httpRequest(`http://127.0.0.1:${port}/json/version`, { timeoutMs: 2000 });
     return res.status === 200;
   } catch {
     return false;
@@ -68,7 +86,13 @@ async function cdpAlive(): Promise<boolean> {
 }
 
 async function ensureBrowser(): Promise<void> {
-  if (await cdpAlive()) return;
+  // reuse: in-memory port, then the profile's DevToolsActivePort file
+  if (cdpPort && (await cdpAlive(cdpPort))) return;
+  const fromFile = readDevToolsPort();
+  if (fromFile && (await cdpAlive(fromFile))) {
+    cdpPort = fromFile;
+    return;
+  }
   const exe = findBrowserExe();
   if (!exe) throw new Error("no Chrome/Edge found on this machine");
   mkdirSync(PATHS.browserProfile, { recursive: true });
@@ -76,7 +100,7 @@ async function ensureBrowser(): Promise<void> {
   browserProc = spawn(
     exe,
     [
-      `--remote-debugging-port=${CDP_PORT}`,
+      "--remote-debugging-port=0", // OS-assigned; read back via DevToolsActivePort
       `--user-data-dir=${PATHS.browserProfile}`,
       "--no-first-run",
       "--no-default-browser-check",
@@ -94,7 +118,11 @@ async function ensureBrowser(): Promise<void> {
   browserProc.unref();
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    if (await cdpAlive()) return;
+    const p = readDevToolsPort();
+    if (p && (await cdpAlive(p))) {
+      cdpPort = p;
+      return;
+    }
     await new Promise((r) => setTimeout(r, 400));
   }
   throw new Error("browser did not open its CDP port within 15s");
@@ -109,15 +137,15 @@ interface CdpTarget {
 }
 
 async function listTargets(): Promise<CdpTarget[]> {
-  const res = await httpRequest(`${CDP_BASE}/json`, { timeoutMs: 5000 });
+  const res = await httpRequest(`${cdpBase()}/json`, { timeoutMs: 5000 });
   return JSON.parse(res.body.toString("utf8")) as CdpTarget[];
 }
 
 async function newTab(url: string): Promise<CdpTarget> {
   // Chrome ≥111 requires PUT for /json/new
-  let res = await httpRequest(`${CDP_BASE}/json/new?${encodeURIComponent(url)}`, { method: "PUT", timeoutMs: 8000 });
+  let res = await httpRequest(`${cdpBase()}/json/new?${encodeURIComponent(url)}`, { method: "PUT", timeoutMs: 8000 });
   if (res.status >= 400) {
-    res = await httpRequest(`${CDP_BASE}/json/new?${encodeURIComponent(url)}`, { timeoutMs: 8000 });
+    res = await httpRequest(`${cdpBase()}/json/new?${encodeURIComponent(url)}`, { timeoutMs: 8000 });
   }
   if (res.status >= 400) throw new Error(`cannot open tab: HTTP ${res.status}`);
   return JSON.parse(res.body.toString("utf8")) as CdpTarget;
@@ -340,7 +368,7 @@ Use tabId from tabs/open results to address a specific tab; default is the most 
       }
 
       if (action === "close") {
-        await httpRequest(`${CDP_BASE}/json/close/${target.id}`, { timeoutMs: 5000 });
+        await httpRequest(`${cdpBase()}/json/close/${target.id}`, { timeoutMs: 5000 });
         tabConns.get(target.id)?.close();
         tabConns.delete(target.id);
         if (lastTabId === target.id) lastTabId = null;
