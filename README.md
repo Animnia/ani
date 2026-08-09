@@ -6,7 +6,7 @@
 
 - 零 npm 依赖 —— 只用 Node.js 24+ 内置能力（原生 TS、fetch、WebSocket、readline）
 - 单一可执行入口：`node ani.ts`
-- 全部数据在项目内：`data/`（会话、记忆、定时任务、收件箱、日志）
+- 全部数据在项目内：`data/`（会话、记忆、定时任务、收件箱、日志）；也可用 `ANI_CONFIG=/path/to/ani.json` 把配置+全部状态重定向到任意目录（便携/多实例）
 
 ## 设计哲学（学自 pi）
 

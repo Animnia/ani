@@ -4,8 +4,8 @@
  * The daemon watches the file mtime so `node ani.ts approve ...` (a separate
  * process) can add owners to a running instance.
  */
-import { copyFileSync, existsSync, readFileSync, statSync, watch } from "node:fs";
-import { dirname, join } from "node:path";
+import { copyFileSync, existsSync, readFileSync, realpathSync, statSync, watch } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { log, warn } from "./log.ts";
 
@@ -39,6 +39,14 @@ export interface Config {
 }
 
 export const ROOT = new URL("../../", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
+
+/** Optional override: ANI_CONFIG=/path/to/ani.json relocates the config AND
+ *  all instance state (data/, sessions, memory, logs) next to it. Source
+ *  assets (skills/, ani.example.json, persona fallback) stay in the install
+ *  dir. With no override everything lives in the install dir, as before. */
+const CONFIG_FILE = process.env.ANI_CONFIG ? resolve(process.env.ANI_CONFIG) : join(ROOT, "ani.json");
+const STATE_ROOT = dirname(CONFIG_FILE);
+const PERSONA_LOCAL = join(STATE_ROOT, "PERSONA.md");
 /** ani version — read from package.json so releases only bump one place. */
 export const ANI_VERSION: string = (() => {
   try {
@@ -51,19 +59,19 @@ export const ANI_VERSION: string = (() => {
 
 export const PATHS = {
   root: ROOT,
-  configFile: join(ROOT, "ani.json"),
+  configFile: CONFIG_FILE,
   exampleFile: join(ROOT, "ani.example.json"),
-  personaFile: join(ROOT, "PERSONA.md"),
+  personaFile: existsSync(PERSONA_LOCAL) ? PERSONA_LOCAL : join(ROOT, "PERSONA.md"),
   skillsDir: join(ROOT, "skills"),
-  data: join(ROOT, "data"),
-  sessions: join(ROOT, "data", "sessions"),
-  memory: join(ROOT, "data", "memory"),
-  memoryFile: join(ROOT, "data", "memory", "MEMORY.md"),
-  inbox: join(ROOT, "data", "inbox"),
-  cronFile: join(ROOT, "data", "cron.json"),
-  pendingFile: join(ROOT, "data", "pending-pairs.json"),
-  logFile: join(ROOT, "data", "ani.log"),
-  browserProfile: join(ROOT, "data", "browser-profile"),
+  data: join(STATE_ROOT, "data"),
+  sessions: join(STATE_ROOT, "data", "sessions"),
+  memory: join(STATE_ROOT, "data", "memory"),
+  memoryFile: join(STATE_ROOT, "data", "memory", "MEMORY.md"),
+  inbox: join(STATE_ROOT, "data", "inbox"),
+  cronFile: join(STATE_ROOT, "data", "cron.json"),
+  pendingFile: join(STATE_ROOT, "data", "pending-pairs.json"),
+  logFile: join(STATE_ROOT, "data", "ani.log"),
+  browserProfile: join(STATE_ROOT, "data", "browser-profile"),
 };
 
 let current: Config | null = null;
@@ -107,8 +115,18 @@ export function getConfig(): Config {
 export function watchConfig(onReload: (cfg: Config) => void): void {
   reloadListeners.push(onReload);
   try {
-    watch(PATHS.root, { persistent: false }, (_event, filename) => {
-      if (filename && filename !== "ani.json") return;
+    // watch the CONFIG'S directory (== install dir by default, the override
+    // dir when ANI_CONFIG relocates state). Canonicalize first: watching a
+    // path with 8.3 short-name components trips a libuv assertion
+    // (fs-event.c _wcsnicmp) and HARD-CRASHES the process on Windows.
+    let watchDir = dirname(PATHS.configFile);
+    try {
+      watchDir = realpathSync.native(watchDir);
+    } catch {
+      /* keep the raw path */
+    }
+    watch(watchDir, { persistent: false }, (_event, filename) => {
+      if (filename && filename !== basename(PATHS.configFile)) return;
       // editors often write twice; debounce crudely
       setTimeout(() => {
         try {
