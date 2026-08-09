@@ -36,6 +36,8 @@ irm https://raw.githubusercontent.com/Animnia/ani/main/install.ps1 | iex
 
 装完可以跑 `ani doctor` 自检：Node 版本、配置、DeepSeek 连通、代理、QQ/Telegram 凭据、浏览器，逐项 ✓/✗ 报告。
 
+以后升级只需 `ani update`（有 .git 走 `git pull --ff-only`，否则 tarball 覆盖安装；`ani.json` 和 `data/` 不受影响），升级后重启 ani 生效。
+
 ## 手动安装
 
 ```bash

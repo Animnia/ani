@@ -36,6 +36,38 @@ async function main(): Promise<void> {
     process.exit(await runDoctor());
   }
 
+  // self-update: pull the latest release into the install dir.
+  // ani.json + data/ are gitignored / absent from the tarball, so an
+  // overlay never touches user state. ani must be restarted afterwards.
+  if (args[0] === "update") {
+    const { execFileSync } = await import("node:child_process");
+    const { existsSync } = await import("node:fs");
+    const dir = PATHS.root;
+    try {
+      if (existsSync(dir + ".git")) {
+        console.log("updating via git…");
+        execFileSync("git", ["pull", "--ff-only"], { cwd: dir, stdio: "inherit" });
+      } else {
+        console.log("no .git here — overlaying the latest tarball…");
+        const url = "https://github.com/Animnia/ani/archive/refs/heads/main.tar.gz";
+        const tmp = dir + ".ani-update.tar.gz";
+        const proxy = process.env.ANI_GH_PROXY ?? process.env.HTTPS_PROXY;
+        execFileSync(
+          "curl",
+          [...(proxy ? ["-x", proxy] : []), "-fsSL", "--max-time", "120", "-o", tmp, url],
+          { stdio: "inherit" },
+        );
+        execFileSync("tar", ["xzf", tmp, "--strip-components=1", "-C", dir], { stdio: "inherit" });
+        execFileSync(process.platform === "win32" ? "del" : "rm", [tmp], { shell: true, stdio: "inherit" });
+      }
+      console.log("updated. restart ani to run the new version.");
+    } catch (e) {
+      console.error(`update failed: ${e instanceof Error ? e.message : e}\ntry re-running the one-line installer instead.`);
+      process.exit(1);
+    }
+    return;
+  }
+
   initLog(PATHS.logFile);
   const router = new Router();
   await router.init();
