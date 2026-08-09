@@ -4,6 +4,7 @@
  *   node ani.ts                 start everything + interactive terminal
  *   node ani.ts --no-cli        daemon mode (channels + cron only)
  *   node ani.ts approve <CODE>  approve a pairing code (works while daemon runs)
+ *   node ani.ts doctor          self-diagnosis (config, network, channels)
  */
 import { initLog, log, error } from "./src/core/log.ts";
 import { PATHS } from "./src/core/config.ts";
@@ -28,6 +29,11 @@ async function main(): Promise<void> {
     }
     console.log(`approved ${p.channel}:${p.userId}${p.userName ? ` (${p.userName})` : ""} — running daemon picks this up automatically`);
     return;
+  }
+
+  if (args[0] === "doctor") {
+    const { runDoctor } = await import("./src/doctor.ts");
+    process.exit(await runDoctor());
   }
 
   initLog(PATHS.logFile);

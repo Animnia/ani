@@ -7,10 +7,10 @@
  * Intents: C2C private messages (1<<25), group @-messages (1<<30),
  * direct messages (1<<12).
  */
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { download, httpRequest } from "../core/net.ts";
-import { getConfig, PATHS, type ChannelConfig } from "../core/config.ts";
+import { PATHS, type ChannelConfig } from "../core/config.ts";
 import { error, log, warn } from "../core/log.ts";
 import type { Channel, InboundEvent } from "../core/types.ts";
 import { chunkText, DedupSet } from "./base.ts";
@@ -18,6 +18,7 @@ import { chunkText, DedupSet } from "./base.ts";
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
 const API_BASE = "https://api.sgroup.qq.com";
 const MAX_MSG = 3800;
+const QQ_TYPES_FILE = join(PATHS.data, "qq-chat-types.json");
 
 const INTENTS = (1 << 25) | (1 << 30) | (1 << 12);
 
@@ -45,6 +46,26 @@ export class QQChannel implements Channel {
   constructor(cfg: ChannelConfig, onMessage: (evt: InboundEvent) => void) {
     this.cfg = cfg;
     this.onMessage = onMessage;
+    // chatTypes are durable knowledge (which openid is a group vs a user) —
+    // persist them so cron pushes after a restart hit the right endpoint.
+    try {
+      if (existsSync(QQ_TYPES_FILE)) {
+        for (const [k, v] of Object.entries(JSON.parse(readFileSync(QQ_TYPES_FILE, "utf8")))) {
+          if (v === "c2c" || v === "group" || v === "dm") this.chatTypes.set(k, v);
+        }
+      }
+    } catch {
+      /* start empty */
+    }
+  }
+
+  private persistChatTypes(): void {
+    try {
+      mkdirSync(PATHS.data, { recursive: true });
+      writeFileSync(QQ_TYPES_FILE, JSON.stringify(Object.fromEntries(this.chatTypes)));
+    } catch {
+      /* non-fatal */
+    }
   }
 
   isOwner(userId: string): boolean {
@@ -270,7 +291,10 @@ export class QQChannel implements Channel {
     if (!chatId || !userId) return;
 
     let text = String(d.content ?? "").trim();
-    this.chatTypes.set(chatId, chatType);
+    if (this.chatTypes.get(chatId) !== chatType) {
+      this.chatTypes.set(chatId, chatType);
+      this.persistChatTypes();
+    }
     this.lastMsgId.set(chatId, msgId);
 
     const files: { path: string; name: string; size: number }[] = [];

@@ -32,6 +32,8 @@ irm https://raw.githubusercontent.com/Animnia/ani/main/install.ps1 | iex
 
 安装器会：检测/安装 Node.js ≥ 24（winget 或官方压缩包，可选 `ANI_NODE_MIRROR` 镜像，如 `https://registry.npmmirror.com/-/binary/node`）→ 拉取 ani 到 `~/.ani` → 创建 `ani` 命令并加入 PATH → 生成 `ani.json` 配置模板。装完编辑 `ani.json` 填入密钥，新开终端运行 `ani`。重新运行安装命令即可升级。
 
+装完可以跑 `ani doctor` 自检：Node 版本、配置、DeepSeek 连通、代理、QQ/Telegram 凭据、浏览器，逐项 ✓/✗ 报告。
+
 ## 手动安装
 
 ```bash

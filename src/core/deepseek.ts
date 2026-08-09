@@ -31,7 +31,37 @@ export function toWire(m: Msg): Record<string, unknown> {
 }
 
 export function createDeepSeekStream(opts: DeepSeekOpts): StreamFn {
-  return async (params: StreamParams): Promise<StreamResult> => {
+  return (params: StreamParams) => streamWithRetry(opts, params);
+}
+
+async function streamWithRetry(opts: DeepSeekOpts, params: StreamParams): Promise<StreamResult> {
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    // if any delta already reached the UI, a retry would duplicate output — don't
+    let emitted = false;
+    const guarded: StreamParams = {
+      ...params,
+      onTextDelta: params.onTextDelta ? (d) => { emitted = true; params.onTextDelta!(d); } : undefined,
+      onReasoningDelta: params.onReasoningDelta ? (d) => { emitted = true; params.onReasoningDelta!(d); } : undefined,
+    };
+    try {
+      return await streamOnce(opts, guarded);
+    } catch (e) {
+      lastErr = e;
+      const msg = e instanceof Error ? e.message : String(e);
+      // only transient failures are worth another shot; aborts and 4xx are not
+      const transient =
+        /timeout|ECONN|ECONNRESET|ETIMEDOUT|socket|closed|DeepSeek API (429|5\d\d)/i.test(msg) &&
+        !/API (400|401|402|403|404|422)/.test(msg);
+      if (!transient || emitted || params.signal?.aborted || attempt === 2) throw e;
+      await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
+
+async function streamOnce(opts: DeepSeekOpts, params: StreamParams): Promise<StreamResult> {
+  {
     const { model, messages, tools, signal, onTextDelta, onReasoningDelta, maxTokens } = params;
     const payload: Record<string, unknown> = {
       model,
@@ -116,5 +146,5 @@ export function createDeepSeekStream(opts: DeepSeekOpts): StreamFn {
       finishReason,
       usage,
     };
-  };
+  }
 }
