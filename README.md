@@ -152,6 +152,19 @@ node --test "tests/net.test.ts"      # 单跑某个
 
 集成测试需要网络 + 有效的 `ani.json`（DeepSeek key、Telegram 代理、QQ 网关）。QQ/TG 的**消息收发**测试需要你真人给 bot 发条消息——没有真人协助这部分无法自动化，属预期。
 
+## 排障速查
+
+| 症状 | 原因 / 处置 |
+|---|---|
+| bot 不回消息 | 先 `ani status` 看 daemon 是否在跑；再看 `data/ani.log`（daemon 模式看你自己重定向的日志）。未配对账号只会收到配对码 |
+| 配对码没收到/失效 | 码 30 分钟过期，重新发消息即可；QQ 首条是主动推送（沙箱有配额），收不到就换 TG 配对 |
+| `ani is already running (pid N)` | 单实例锁。想重开：先停旧的（`taskkill /PID N /F` 或 `kill N`）；pid 已死就删 `data/ani.lock` |
+| 日志反复 `Conflict: terminated by other getUpdates` | 另一个 ani 实例在轮询同一 TG token——一 token 只能一实例，停掉另一边 |
+| QQ 频繁掉线重连 | 另一设备用同一凭据登录了（会话互抢）。同一 bot 同时只能一个 ani |
+| Telegram 一直 poll error | 代理不通：`ani doctor` 的 proxy 项会报。配 `proxy` 为 `http://127.0.0.1:<端口>` |
+| DeepSeek 400 tool 相关 | 理论上不会发生（会话压缩保证工具链完整，有 fuzz 守护）；真遇到请提 issue 附 `data/ani.log` |
+| 想从零重来 | 停 daemon → 删 `data/`（记忆在 `data/memory/`，要留就备份）→ 重启 |
+
 ## 已知取舍
 
 - **纯文本**：DeepSeek 无图片输入；收到的图片存本地，agent 可用本地工具处理。
