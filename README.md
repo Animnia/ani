@@ -160,7 +160,8 @@ node --test "tests/net.test.ts"      # 单跑某个
 | 配对码没收到/失效 | 码 30 分钟过期，重新发消息即可；QQ 首条是主动推送（沙箱有配额），收不到就换 TG 配对 |
 | `ani is already running (pid N)` | 单实例锁。想重开：先停旧的（`taskkill /PID N /F` 或 `kill N`）；pid 已死就删 `data/ani.lock` |
 | 日志反复 `Conflict: terminated by other getUpdates` | 另一个 ani 实例在轮询同一 TG token——一 token 只能一实例，停掉另一边 |
-| QQ 频繁掉线重连 | 另一设备用同一凭据登录了（会话互抢）。同一 bot 同时只能一个 ani |
+| QQ 每 ~30 分钟一次 `closed (code 4009)` 后秒级恢复 | **正常现象**：沙箱 token 30 分钟过期，QQ 踢掉旧会话，ani 自动刷新重连 |
+| QQ 更频繁地掉线重连 | 另一设备用同一凭据登录了（会话互抢）。同一 bot 同时只能一个 ani |
 | Telegram 一直 poll error | 代理不通：`ani doctor` 的 proxy 项会报。配 `proxy` 为 `http://127.0.0.1:<端口>` |
 | DeepSeek 400 tool 相关 | 理论上不会发生（会话压缩保证工具链完整，有 fuzz 守护）；真遇到请提 issue 附 `data/ani.log` |
 | 想从零重来 | 停 daemon → 删 `data/`（记忆在 `data/memory/`，要留就备份）→ 重启 |
