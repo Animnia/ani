@@ -257,7 +257,8 @@ export class Router implements MessagingBridge {
         await this.deliver(chatKey, `出错了: ${msg.slice(0, 300)}`).catch(() => {});
       }
     } finally {
-      this.running.delete(chatKey);
+      // defensive: only remove if this run is still the registered one
+      if (this.running.get(chatKey) === controller) this.running.delete(chatKey);
     }
   }
 

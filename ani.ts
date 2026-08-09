@@ -41,11 +41,13 @@ async function main(): Promise<void> {
   await router.init();
   log("ani", `started. channels: ${router.channelNames().join(", ") || "(none)"}, model: ${router.model()}`);
 
-  process.on("SIGINT", async () => {
-    log("ani", "shutting down");
+  const shutdown = async (sig: string) => {
+    log("ani", `shutting down (${sig})`);
     await router.shutdown();
     process.exit(0);
-  });
+  };
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
   if (!args.includes("--no-cli")) {
     startCli(router);

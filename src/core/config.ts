@@ -90,11 +90,14 @@ export function getConfig(): Config {
   return current ?? loadConfig();
 }
 
-/** Start watching ani.json for external edits (e.g. the approve command). */
+/** Start watching ani.json for external edits (e.g. the approve command).
+ *  Watches the DIRECTORY, not the file: editors that save via atomic
+ *  delete+recreate kill file-level watchers after the first write. */
 export function watchConfig(onReload: (cfg: Config) => void): void {
   reloadListeners.push(onReload);
   try {
-    watch(PATHS.configFile, { persistent: false }, () => {
+    watch(PATHS.root, { persistent: false }, (_event, filename) => {
+      if (filename && filename !== "ani.json") return;
       // editors often write twice; debounce crudely
       setTimeout(() => {
         try {
@@ -110,6 +113,6 @@ export function watchConfig(onReload: (cfg: Config) => void): void {
       }, 300);
     });
   } catch (e) {
-    warn("config", "cannot watch ani.json:", e);
+    warn("config", "cannot watch config dir:", e);
   }
 }
