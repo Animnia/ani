@@ -1,0 +1,8 @@
+node_modules/
+data/
+ani.json
+*.log
+tmp_probe/
+
+# contains private test credentials — never commit
+RULE.md

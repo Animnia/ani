@@ -1,0 +1,16 @@
+{
+  "name": "ani",
+  "version": "0.1.0",
+  "description": "A tiny personal agent: DeepSeek brain, QQ/Telegram body, pi soul.",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "start": "node ani.ts",
+    "daemon": "node ani.ts --no-cli",
+    "test": "node --test --test-timeout=120000 \"tests/*.test.ts\""
+  },
+  "license": "MIT",
+  "private": true
+}

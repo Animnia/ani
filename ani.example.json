@@ -1,0 +1,26 @@
+{
+  "$comment": "Copy this file to ani.json and fill in your keys. ani.json is gitignored.",
+  "model": "deepseek-v4-flash",
+  "deepseek": {
+    "apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "baseUrl": "https://api.deepseek.com"
+  },
+  "proxy": "http://127.0.0.1:6850",
+  "channels": {
+    "telegram": {
+      "enabled": false,
+      "token": "123456:ABC-your-bot-token",
+      "useProxy": true,
+      "owners": []
+    },
+    "qq": {
+      "enabled": false,
+      "appId": "",
+      "clientSecret": "",
+      "useProxy": false,
+      "owners": []
+    }
+  },
+  "mcpServers": {},
+  "maxContextChars": 600000
+}

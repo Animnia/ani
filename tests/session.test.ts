@@ -1,0 +1,107 @@
+/**
+ * Session persistence + compaction boundary integrity.
+ */
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { SessionStore } from "../src/core/session.ts";
+import type { Msg, StreamFn } from "../src/core/types.ts";
+
+function tmp(): string {
+  return mkdtempSync(join(tmpdir(), "ani-session-"));
+}
+
+test("append + reload roundtrip", { timeout: 5000 }, () => {
+  const dir = tmp();
+  try {
+    const s1 = new SessionStore(dir);
+    s1.append("cli:local", { role: "user", content: "hello", _meta: { ts: 1 } });
+    s1.append("cli:local", { role: "assistant", content: "hi", _meta: { ts: 2 } });
+    s1.append("qq:ABC", { role: "user", content: "other chat", _meta: { ts: 3 } });
+
+    const s2 = new SessionStore(dir);
+    const msgs = s2.get("cli:local");
+    assert.equal(msgs.length, 2);
+    assert.equal(msgs[0].content, "hello");
+    assert.equal(s2.get("qq:ABC").length, 1);
+    assert.equal(s2.get("nobody").length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("compaction summarizes and keeps tool chains intact", { timeout: 15_000 }, async () => {
+  const dir = tmp();
+  try {
+    const store = new SessionStore(dir, 3000); // tiny budget to force compaction
+    const key = "cli:test";
+    // 20 turns, some with tool chains
+    for (let i = 0; i < 20; i++) {
+      store.append(key, { role: "user", content: `question ${i} ${"x".repeat(100)}`, _meta: { ts: i } });
+      store.append(key, {
+        role: "assistant",
+        content: "",
+        reasoning_content: "thinking " + i,
+        tool_calls: [{ id: `c${i}`, type: "function", function: { name: "shell", arguments: `{"command":"echo ${i}"}` } }],
+        _meta: { ts: i },
+      });
+      store.append(key, { role: "tool", tool_call_id: `c${i}`, content: `output ${i} ${"y".repeat(100)}`, _meta: { ts: i } });
+      store.append(key, { role: "assistant", content: `answer ${i} ${"z".repeat(100)}`, _meta: { ts: i } });
+    }
+
+    const fakeSummarize: StreamFn = async ({ messages }) => {
+      assert.equal(messages.length, 1);
+      assert.match(messages[0].content, /Summarize/);
+      return { content: "SUMMARY: user asked questions 0-13", reasoning: "", toolCalls: [], finishReason: "stop" };
+    };
+
+    await store.maybeCompact(key, fakeSummarize, "test-model");
+
+    const msgs = store.get(key);
+    // first message is the summary
+    assert.match(msgs[0].content, /earlier conversation summary/);
+    assert.match(msgs[0].content, /SUMMARY/);
+    assert.ok(msgs.length < 80, "history shrank");
+
+    // integrity: every assistant tool_calls must be followed by matching tool results,
+    // and every tool message must have a preceding assistant with that tool_call id
+    for (let i = 0; i < msgs.length; i++) {
+      const m = msgs[i];
+      if (m.role === "assistant" && m.tool_calls?.length) {
+        const need = m.tool_calls.map((t) => t.id).sort();
+        const got: string[] = [];
+        let j = i + 1;
+        while (j < msgs.length && msgs[j].role === "tool") {
+          got.push(msgs[j].tool_call_id!);
+          j++;
+        }
+        assert.deepEqual(got.sort(), need, `tool chain broken at msg ${i}`);
+      }
+      if (m.role === "tool") {
+        const prevAssistant = msgs.slice(0, i).reverse().find((x) => x.role === "assistant");
+        assert.ok(prevAssistant?.tool_calls?.some((t) => t.id === m.tool_call_id), `orphan tool message at ${i}`);
+      }
+    }
+
+    // persistence: reload and verify the compacted file is valid JSONL
+    const store2 = new SessionStore(dir, 3000);
+    assert.match(store2.get(key)[0].content, /SUMMARY/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("reset clears session", { timeout: 5000 }, () => {
+  const dir = tmp();
+  try {
+    const s = new SessionStore(dir);
+    s.append("a", { role: "user", content: "hi" });
+    s.reset("a");
+    assert.equal(s.get("a").length, 0);
+    assert.equal(new SessionStore(dir).get("a").length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
