@@ -188,19 +188,31 @@ export class QQChannel implements Channel {
     });
   }
 
+  private reconnecting = false;
+
   private async reconnect(): Promise<void> {
-    if (!this.running) return;
-    const delay = this.reconnectDelay;
-    this.reconnectDelay = Math.min(this.reconnectDelay * 2, 60_000);
-    log("qq", `reconnecting in ${delay / 1000}s`);
-    await new Promise((r) => setTimeout(r, delay));
-    if (!this.running) return;
+    // guard against double-scheduled reconnects (overlapping close events)
+    if (!this.running || this.reconnecting) return;
+    this.reconnecting = true;
     try {
-      await this.connect();
-      this.reconnectDelay = 1000;
-    } catch (e) {
-      warn("qq", `reconnect failed: ${e instanceof Error ? e.message : e}`);
-      void this.reconnect();
+      while (this.running) {
+        if (this.ws && this.ws.readyState !== WebSocket.CLOSED) return; // already reconnected elsewhere
+        const delay = this.reconnectDelay;
+        this.reconnectDelay = Math.min(this.reconnectDelay * 2, 60_000);
+        log("qq", `reconnecting in ${delay / 1000}s`);
+        await new Promise((r) => setTimeout(r, delay));
+        if (!this.running) return;
+        if (this.ws && this.ws.readyState !== WebSocket.CLOSED) return;
+        try {
+          await this.connect();
+          this.reconnectDelay = 1000;
+          return; // connected — hello/identify continues over the wire
+        } catch (e) {
+          warn("qq", `reconnect failed: ${e instanceof Error ? e.message : e}`);
+        }
+      }
+    } finally {
+      this.reconnecting = false;
     }
   }
 

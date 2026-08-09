@@ -10,6 +10,7 @@ export function startCli(router: Router): void {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   let busy = false;
   let streaming = false;
+  let queued: string | null = null; // one-deep queue for input typed mid-run
 
   const prompt = () => {
     if (!busy) process.stdout.write("\nyou> ");
@@ -31,31 +32,37 @@ export function startCli(router: Router): void {
         return;
       }
       if (busy) {
-        process.stdout.write("(still working on the previous message — wait for it)\n");
+        // merge multiple mid-run messages into one follow-up turn
+        queued = queued ? queued + "\n" + text : text;
+        process.stdout.write("(still working — your message is queued)\n");
         return;
       }
       busy = true;
       streaming = false;
       try {
-        await router.runCliTurn(
-          text,
-          (d) => {
-            if (!streaming) {
-              process.stdout.write("\nani> ");
-              streaming = true;
-            }
-            process.stdout.write(d);
-          },
-          (name, ok, preview) => {
-            process.stdout.write(`\x1b[90m ${ok ? "✓" : "✗"} ${preview}\x1b[0m\n`);
-          },
-        );
-        process.stdout.write("\n");
+        for (let current: string | null = text; current !== null; current = queued, queued = null) {
+          streaming = false;
+          await router.runCliTurn(
+            current,
+            (d) => {
+              if (!streaming) {
+                process.stdout.write("\nani> ");
+                streaming = true;
+              }
+              process.stdout.write(d);
+            },
+            (name, ok, preview) => {
+              process.stdout.write(`\x1b[90m ${ok ? "✓" : "✗"} ${preview}\x1b[0m\n`);
+            },
+          );
+          process.stdout.write("\n");
+        }
       } catch (e) {
         process.stdout.write(`\nerror: ${e instanceof Error ? e.message : e}\n`);
       } finally {
         busy = false;
         streaming = false;
+        queued = null;
         prompt();
       }
     })();

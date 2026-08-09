@@ -137,7 +137,6 @@ export async function runDoctor(): Promise<number> {
 
   // browser (best-effort — absence only matters if the agent needs it)
   try {
-    const { existsSync } = await import("node:fs");
     const candidates: string[] =
       process.platform === "win32"
         ? [

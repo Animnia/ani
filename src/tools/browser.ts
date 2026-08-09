@@ -167,6 +167,13 @@ class CdpConn {
         p.reject(new Error("CDP websocket closed"));
       }
       this.pending.clear();
+      // evict from the connection cache so the next call re-attaches cleanly
+      for (const [tabId, c] of tabConns) {
+        if (c === this) {
+          tabConns.delete(tabId);
+          break;
+        }
+      }
     });
   }
 
