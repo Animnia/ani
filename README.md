@@ -102,6 +102,21 @@ node ani.ts approve ABC123       # 或另开一个终端（守护进程会热加
 /help /reset /approve CODE /chats /model /quit
 ```
 
+## 常驻后台运行
+
+`node ani.ts` 默认带交互终端；关掉终端它就退出。想让它在后台一直跑（收消息、执行定时任务）：
+
+```bash
+# Linux / macOS
+nohup node ani.ts --no-cli > data/daemon.log 2>&1 &
+
+# Windows (PowerShell)
+Start-Process node -ArgumentList 'ani.ts','--no-cli' -WindowStyle Hidden `
+  -RedirectStandardOutput data\daemon.log -RedirectStandardError data\daemon.err.log
+```
+
+`--no-cli` = 纯守护模式（只跑频道 + 定时任务）。同一配置同时只允许一个实例（`data/ani.lock` 持锁），重复启动会直接退出并提示已在运行的 pid。日常运维：`ani status` 看状态，`ani doctor` 查配置，`ani update` 升级（升完重启 daemon 生效）。
+
 ## 使用速查
 
 跟 ani 说话即可，例如：
