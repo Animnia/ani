@@ -3,6 +3,7 @@ data/
 ani.json
 *.log
 tmp_probe/
+.ani-update.tar.gz
 
 # contains private test credentials — never commit
 RULE.md
