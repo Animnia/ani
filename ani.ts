@@ -81,6 +81,12 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
+  // lifetime anchor: with no channels enabled and no CLI, nothing else holds
+  // the event loop (cron's timer is unref'd; the config watcher is
+  // non-persistent) and the daemon would exit silently right after boot.
+  // The entry point owns process lifetime explicitly.
+  setInterval(() => {}, 2_147_483_647);
+
   if (!args.includes("--no-cli")) {
     startCli(router);
   }

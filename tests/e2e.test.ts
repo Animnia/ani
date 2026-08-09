@@ -6,6 +6,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { hasLiveChannels, hasLiveCredentials, needs } from "./helpers.ts";
 
 const SKIP = needs(hasLiveCredentials() && hasLiveChannels(), "valid ani.json with live channels");
@@ -50,5 +53,52 @@ test("ani boots, channels connect, CLI agent turn works", { timeout: 180_000, ..
     assert.match(out, /cli:local/);
   } finally {
     await kill();
+  }
+});
+
+// regression: a daemon with ZERO enabled channels used to exit silently right
+// after boot (cron timer unref'd, config watcher non-persistent — nothing held
+// the event loop). It must stay up until signalled.
+test("daemon with no channels stays alive until signalled", { timeout: 60_000 }, async () => {
+  const root = new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
+  const dir = mkdtempSync(join(tmpdir(), "ani-e2e-nk-"));
+  try {
+    const cfg = JSON.parse(readFileSync(join(root, "ani.example.json"), "utf8"));
+    cfg.deepseek.apiKey = "test-dummy"; // no live calls happen: nothing connects
+    writeFileSync(join(dir, "ani.json"), JSON.stringify(cfg));
+    copyFileSync(join(root, "PERSONA.md"), join(dir, "PERSONA.md"));
+
+    const child = spawn("node", [join(root, "ani.ts"), "--no-cli"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, ANI_CONFIG: join(dir, "ani.json") },
+    });
+    let out = "";
+    child.stdout.on("data", (d) => (out += d.toString()));
+    child.stderr.on("data", (d) => (out += d.toString()));
+    try {
+      // wait for startup, then prove it is STILL alive 3s later
+      const deadline = Date.now() + 20_000;
+      while (!out.includes("started") && Date.now() < deadline) {
+        assert.equal(child.exitCode, null, `exited during boot:\n${out}`);
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      assert.ok(out.includes("started"), `never booted:\n${out}`);
+      await new Promise((r) => setTimeout(r, 3000));
+      assert.equal(child.exitCode, null, `daemon exited silently after boot:\n${out}`);
+
+      if (process.platform !== "win32") {
+        // POSIX: SIGTERM reaches the handler — clean shutdown must be logged
+        child.kill("SIGTERM");
+        await Promise.race([once(child, "exit"), new Promise((r) => setTimeout(r, 8000))]);
+        assert.match(out, /shutting down \(SIGTERM\)/, `graceful shutdown missing:\n${out}`);
+      }
+    } finally {
+      if (child.exitCode === null) {
+        child.kill("SIGKILL");
+        await Promise.race([once(child, "exit"), new Promise((r) => setTimeout(r, 5000))]);
+      }
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
