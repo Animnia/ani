@@ -81,7 +81,7 @@ export function startCli(router: Router): void {
             "/reset          clear the CLI conversation",
             "/approve CODE   approve a QQ/Telegram pairing code",
             "/chats          list known chats",
-            "/model NAME     show current model (edit ani.json to change)",
+            "/model          show current model (edit ani.json to change — hot-reloads)",
             "/quit           exit",
             "anything else → chat with ani",
             "",
