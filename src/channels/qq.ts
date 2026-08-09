@@ -8,7 +8,7 @@
  * direct messages (1<<12).
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { download, httpRequest } from "../core/net.ts";
 import { PATHS, type ChannelConfig } from "../core/config.ts";
 import { error, log, warn } from "../core/log.ts";
@@ -45,19 +45,26 @@ export class QQChannel implements Channel {
 
   /** endpoint overrides — tests inject a local mock gateway here */
   private endpoints: { tokenUrl: string; apiBase: string };
+  /** state file for durable chatType knowledge; tests redirect it */
+  private typesFile = QQ_TYPES_FILE;
 
-  constructor(cfg: ChannelConfig, onMessage: (evt: InboundEvent) => void, endpoints?: { tokenUrl?: string; apiBase?: string }) {
+  constructor(
+    cfg: ChannelConfig,
+    onMessage: (evt: InboundEvent) => void,
+    endpoints?: { tokenUrl?: string; apiBase?: string; typesFile?: string },
+  ) {
     this.cfg = cfg;
     this.onMessage = onMessage;
     this.endpoints = {
       tokenUrl: endpoints?.tokenUrl ?? TOKEN_URL,
       apiBase: endpoints?.apiBase ?? API_BASE,
     };
+    if (endpoints?.typesFile) this.typesFile = endpoints.typesFile;
     // chatTypes are durable knowledge (which openid is a group vs a user) —
     // persist them so cron pushes after a restart hit the right endpoint.
     try {
-      if (existsSync(QQ_TYPES_FILE)) {
-        for (const [k, v] of Object.entries(JSON.parse(readFileSync(QQ_TYPES_FILE, "utf8")))) {
+      if (existsSync(this.typesFile)) {
+        for (const [k, v] of Object.entries(JSON.parse(readFileSync(this.typesFile, "utf8")))) {
           if (v === "c2c" || v === "group" || v === "dm") this.chatTypes.set(k, v);
         }
       }
@@ -68,8 +75,8 @@ export class QQChannel implements Channel {
 
   private persistChatTypes(): void {
     try {
-      mkdirSync(PATHS.data, { recursive: true });
-      writeFileSync(QQ_TYPES_FILE, JSON.stringify(Object.fromEntries(this.chatTypes)));
+      mkdirSync(dirname(this.typesFile), { recursive: true });
+      writeFileSync(this.typesFile, JSON.stringify(Object.fromEntries(this.chatTypes)));
     } catch {
       /* non-fatal */
     }

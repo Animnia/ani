@@ -12,6 +12,11 @@ import http from "node:http";
 import net from "node:net";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const TMP_TYPES = join(mkdtempSync(join(tmpdir(), "ani-qqgw-")), "types.json");
 import { QQChannel } from "../src/channels/qq.ts";
 import type { InboundEvent } from "../src/core/types.ts";
 
@@ -167,7 +172,7 @@ test("QQ full gateway lifecycle: identify → READY → dispatch → 4009 reconn
   const qq = new QQChannel(
     { enabled: true, appId: "a", clientSecret: "s", owners: [] },
     (e) => events.push(e),
-    { tokenUrl: `http://127.0.0.1:${gw.port}/token`, apiBase: `http://127.0.0.1:${gw.port}` },
+    { tokenUrl: `http://127.0.0.1:${gw.port}/token`, apiBase: `http://127.0.0.1:${gw.port}`, typesFile: TMP_TYPES },
   );
   try {
     await qq.start();
@@ -212,7 +217,7 @@ test("QQ resume path: session kept on normal close, op 6 sent on reconnect", { t
   const qq = new QQChannel(
     { enabled: true, appId: "a", clientSecret: "s", owners: [] },
     () => {},
-    { tokenUrl: `http://127.0.0.1:${gw.port}/token`, apiBase: `http://127.0.0.1:${gw.port}` },
+    { tokenUrl: `http://127.0.0.1:${gw.port}/token`, apiBase: `http://127.0.0.1:${gw.port}`, typesFile: TMP_TYPES },
   );
   try {
     await qq.start();

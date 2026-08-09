@@ -4,6 +4,9 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { chunkText, DedupSet } from "../src/channels/base.ts";
 import { QQChannel } from "../src/channels/qq.ts";
 import type { InboundEvent } from "../src/core/types.ts";
@@ -28,7 +31,9 @@ test("DedupSet evicts oldest", { timeout: 5000 }, () => {
 });
 
 function makeQQ(onMessage: (e: InboundEvent) => void): QQChannel {
-  return new QQChannel({ enabled: false, appId: "x", clientSecret: "y", owners: [] }, onMessage);
+  // redirect the durable chatTypes file — tests must not touch real state
+  const tmp = join(mkdtempSync(join(tmpdir(), "ani-qq-")), "types.json");
+  return new QQChannel({ enabled: false, appId: "x", clientSecret: "y", owners: [] }, onMessage, { typesFile: tmp });
 }
 
 test("QQ C2C dispatch produces an InboundEvent", { timeout: 10_000 }, async () => {
