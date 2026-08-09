@@ -163,6 +163,29 @@ test("new message aborts the stale run; only the latest gets answered", { timeou
   }
 });
 
+test("pairing never leaks into group chats", { timeout: 30_000 }, async () => {
+  const files = tmpFiles();
+  try {
+    let calls = 0;
+    const counting: StreamFn = async () => {
+      calls++;
+      return { content: "hi", reasoning: "", toolCalls: [], finishReason: "stop" };
+    };
+    const { router, channel } = await makeRouter(counting, files);
+    try {
+      // stranger @-mentions the bot in a group
+      await (router as any).handleInbound({ channel: "fake", chatId: "GROUP1", userId: "rando", text: "@ani hi", isGroup: true });
+      await new Promise((r) => setTimeout(r, 400));
+      assert.equal(channel.sent.length, 0, "no pairing reply in groups");
+      assert.equal(calls, 0, "model not invoked");
+    } finally {
+      await router.shutdown();
+    }
+  } finally {
+    files.cleanup();
+  }
+});
+
 test("cron result is delivered to the target chat", { timeout: 30_000 }, async () => {
   const files = tmpFiles();
   try {
@@ -181,6 +204,44 @@ test("cron result is delivered to the target chat", { timeout: 30_000 }, async (
       assert.equal(channel.sent[0].chatId, "boss-chat");
       assert.match(channel.sent[0].text, /⏰ morning/);
       assert.match(channel.sent[0].text, /cron report body/);
+    } finally {
+      await router.shutdown();
+    }
+  } finally {
+    files.cleanup();
+  }
+});
+
+test("cron agent's send_message defaults to the delivery target", { timeout: 30_000 }, async () => {
+  const files = tmpFiles();
+  try {
+    // model calls send_message (no chatKey) on round 1, then finishes
+    const toolCalling: StreamFn = async ({ messages }) => {
+      const last = messages[messages.length - 1];
+      if (last.role === "tool") {
+        assert.equal(last.content, "Sent to fake:boss-chat", "tool resolved the cron target as default chatKey");
+        return { content: "report done", reasoning: "", toolCalls: [], finishReason: "stop" };
+      }
+      return {
+        content: "",
+        reasoning: "",
+        toolCalls: [{ id: "s1", type: "function", function: { name: "send_message", arguments: '{"text":"file ready"}' } }],
+        finishReason: "tool_calls",
+      };
+    };
+    const { router, channel } = await makeRouter(toolCalling, files);
+    try {
+      await (router as any).runCronTask({
+        id: "t2",
+        name: "report",
+        schedule: "@daily 08:00",
+        prompt: "make and send the report",
+        target: "fake:boss-chat",
+        enabled: true,
+      });
+      const texts = channel.sent.map((m) => `${m.chatId}: ${m.text}`);
+      assert.ok(texts.some((t) => t === "boss-chat: file ready"), "send_message landed on the target");
+      assert.ok(texts.some((t) => t.includes("⏰ report") && t.includes("report done")), "cron summary delivered too");
     } finally {
       await router.shutdown();
     }

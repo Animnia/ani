@@ -163,6 +163,13 @@ export class Router implements MessagingBridge {
   }
 
   private async handlePairing(channel: Channel, evt: InboundEvent): Promise<void> {
+    // never run the pairing flow in group chats: the code would be visible
+    // to every member, and the reply spam is rude. Log only; pairing
+    // happens in DM.
+    if (evt.isGroup) {
+      log("router", `ignoring non-owner ${evt.userId} in group ${evt.chatId} (pairing via DM only)`);
+      return;
+    }
     const pf = this.pairOpts?.pendingFile;
     const p = upsertPending({ channel: evt.channel, userId: evt.userId, chatId: evt.chatId, userName: evt.userName }, pf);
     log("router", `unauthorized ${evt.channel} user ${evt.userId} (${evt.userName ?? "?"}) — pairing code ${p.code}`);
@@ -280,14 +287,17 @@ export class Router implements MessagingBridge {
       await this.sessions.maybeCompact(chatKey, this.streamFn, this.cfg.model);
       const wire: Msg[] = [{ role: "system", content: buildSystemPrompt() }, ...this.sessions.get(chatKey)];
       const before = wire.length;
-      const [targetChannel] = splitChatKey(task.target);
+      const [targetChannel, targetChatId] = splitChatKey(task.target);
       const result = await runAgent({
         messages: wire,
         tools: this.tools,
         streamFn: this.streamFn,
         model: this.cfg.model,
         signal: controller.signal,
-        ctx: { chatKey, channel: "cron", chatId: task.id, cwd: PATHS.root, signal: controller.signal },
+        // ctx points at the DELIVERY TARGET (not the cron session) so that
+        // send_message/send_file without an explicit chatKey land where the
+        // report goes — previously they errored on the unknown "cron" channel
+        ctx: { chatKey: task.target, channel: targetChannel, chatId: targetChatId, cwd: PATHS.root, signal: controller.signal },
       });
       for (const m of wire.slice(before)) this.sessions.append(chatKey, m);
       const text = result.text.trim() || "(任务完成，无输出)";
