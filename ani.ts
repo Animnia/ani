@@ -98,13 +98,22 @@ async function main(): Promise<void> {
         const url = "https://github.com/Animnia/ani/archive/refs/heads/main.tar.gz";
         const tmp = dir + ".ani-update.tar.gz";
         const proxy = process.env.ANI_GH_PROXY ?? process.env.HTTPS_PROXY;
-        execFileSync(
-          "curl",
-          [...(proxy ? ["-x", proxy] : []), "-fsSL", "--max-time", "120", "-o", tmp, url],
-          { stdio: "inherit" },
-        );
-        execFileSync("tar", ["xzf", tmp, "--strip-components=1", "-C", dir], { stdio: "inherit" });
-        execFileSync(process.platform === "win32" ? "del" : "rm", [tmp], { shell: true, stdio: "inherit" });
+        try {
+          execFileSync(
+            "curl",
+            [...(proxy ? ["-x", proxy] : []), "-fsSL", "--max-time", "120", "-o", tmp, url],
+            { stdio: "inherit" },
+          );
+          // --force-local: on Windows the drive-letter colon in `tmp` makes
+          // tar treat it as a remote host:file ("Cannot connect to C:")
+          execFileSync("tar", ["--force-local", "-xzf", tmp, "--strip-components=1", "-C", dir], { stdio: "inherit" });
+        } finally {
+          try {
+            (await import("node:fs")).rmSync(tmp, { force: true });
+          } catch {
+            /* best effort */
+          }
+        }
       }
       console.log("updated. restart ani to run the new version.");
       // if a daemon is live, say so explicitly — easy to forget otherwise
