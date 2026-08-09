@@ -38,6 +38,8 @@ before(async () => {
         res.write("data: [DONE]\n\n");
         res.end();
       }, 50);
+    } else if (url === "/hang") {
+      // never responds — for deterministic client-timeout testing
     } else if (url === "/redirect") {
       res.writeHead(302, { location: "/hello" });
       res.end();
@@ -155,5 +157,7 @@ test("Queue serializes", { timeout: 10_000 }, async () => {
 });
 
 test("request timeout fires", { timeout: 10_000 }, async () => {
-  await assert.rejects(httpGet(`http://127.0.0.1:${port}/hello`, { timeoutMs: 1 }), /timeout/);
+  // deterministic: the server accepts but never answers, so the client's
+  // inactivity timeout must fire regardless of machine speed
+  await assert.rejects(httpGet(`http://127.0.0.1:${port}/hang`, { timeoutMs: 300 }), /timeout/);
 });
