@@ -119,6 +119,7 @@ export class TelegramChannel implements Channel {
 
   private async pollLoop(): Promise<void> {
     let backoff = 1000;
+    let conflicts = 0; // consecutive 409s — another instance is polling this bot
     while (this.running) {
       try {
         const updates = await this.api<TgUpdate[]>(
@@ -127,6 +128,8 @@ export class TelegramChannel implements Channel {
           35_000,
         );
         backoff = 1000;
+        if (conflicts >= 3) log("telegram", "polling healthy again (the other instance stopped)");
+        conflicts = 0;
         for (const u of updates) {
           this.offset = Math.max(this.offset, u.update_id + 1);
           if (u.message) {
@@ -140,7 +143,21 @@ export class TelegramChannel implements Channel {
         if (updates.length) this.saveOffset();
       } catch (e) {
         if (!this.running) break;
-        warn("telegram", `poll error: ${e instanceof Error ? e.message : e} — retry in ${backoff / 1000}s`);
+        const msg = e instanceof Error ? e.message : String(e);
+        if (/Conflict/.test(msg)) {
+          conflicts++;
+          if (conflicts === 3) {
+            warn(
+              "telegram",
+              "repeated 409 Conflicts: ANOTHER ani instance is polling this bot. " +
+                "One bot token = one running ani — stop the other instance (ani status / ani.lock) " +
+                "or they will keep kicking each other off. Polling continues quietly.",
+            );
+          }
+          if (conflicts < 3) warn("telegram", `poll conflict (another getUpdates active) — retry in ${backoff / 1000}s`);
+        } else {
+          warn("telegram", `poll error: ${msg} — retry in ${backoff / 1000}s`);
+        }
         await new Promise((r) => setTimeout(r, backoff));
         backoff = Math.min(backoff * 2, 30_000);
       }
