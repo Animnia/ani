@@ -119,6 +119,16 @@ Start-Process node -ArgumentList 'ani.ts','--no-cli' -WindowStyle Hidden `
 
 ## 使用速查
 
+真实会话一瞥（CLI；QQ/TG 里只有最终回复）：
+
+```
+you> 现在几点？顺便记住我喜欢深夜写代码
+ ✓ shell(echo %date% %time%) → 2026/08/10 周一 6:38
+ ✓ memory_write → Appended to MEMORY.md
+ani> 现在是 2026年8月10日（周一）早上 6:38。
+     嗯？六点半还没睡？看来这就是你说的"深夜写代码"了😂 已记下。
+```
+
 跟 ani 说话即可，例如：
 
 ```
