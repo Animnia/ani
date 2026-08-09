@@ -36,6 +36,52 @@ async function main(): Promise<void> {
     process.exit(await runDoctor());
   }
 
+  // runtime status: is a daemon up on this config, who is paired, what is
+  // scheduled — the multi-device "is ani alive on that box?" answer
+  if (args[0] === "status") {
+    const { existsSync, readFileSync } = await import("node:fs");
+    const { loadConfig } = await import("./src/core/config.ts");
+    console.log(`ani v${ANI_VERSION} — status\n`);
+    const lockFile = PATHS.data + "/ani.lock";
+    let running = "no";
+    if (existsSync(lockFile)) {
+      const pid = Number(readFileSync(lockFile, "utf8").trim());
+      if (pid) {
+        try {
+          process.kill(pid, 0);
+          running = `yes (pid ${pid})`;
+        } catch {
+          running = `no (stale lock pid ${pid})`;
+        }
+      }
+    }
+    console.log(`  daemon     ${running}`);
+    try {
+      const cfg = loadConfig();
+      const chans = Object.entries(cfg.channels)
+        .filter(([, c]) => c?.enabled)
+        .map(([n, c]) => `${n} (owners: ${c.owners.length || "none"})`);
+      console.log(`  channels   ${chans.join(", ") || "none enabled"}`);
+      console.log(`  model      ${cfg.model}`);
+    } catch (e) {
+      console.log(`  config     unreadable: ${e instanceof Error ? e.message : e}`);
+    }
+    try {
+      const cron = JSON.parse(readFileSync(PATHS.cronFile, "utf8")) as { name: string; enabled: boolean; schedule: string; target: string }[];
+      const en = cron.filter((t) => t.enabled);
+      console.log(`  cron       ${en.length} enabled / ${cron.length} total${en.length ? ": " + en.map((t) => `${t.name} [${t.schedule}] → ${t.target}`).join("; ") : ""}`);
+    } catch {
+      console.log("  cron       none");
+    }
+    try {
+      const mem = readFileSync(PATHS.memoryFile, "utf8");
+      console.log(`  memory     ${mem.split("\n").filter((l) => l.trim()).length} lines in MEMORY.md`);
+    } catch {
+      console.log("  memory     empty");
+    }
+    return;
+  }
+
   // self-update: pull the latest release into the install dir.
   // ani.json + data/ are gitignored / absent from the tarball, so an
   // overlay never touches user state. ani must be restarted afterwards.
