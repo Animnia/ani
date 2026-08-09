@@ -7,6 +7,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { loadConfig, PATHS, watchConfig, type Config } from "./core/config.ts";
 import { approveCode, loadPending, PAIR_RENOTIFY, savePending, upsertPending } from "./core/pairing.ts";
+import { sweepDataDirs } from "./core/janitor.ts";
 import { createDeepSeekStream } from "./core/deepseek.ts";
 import { runAgent } from "./core/agent.ts";
 import { SessionStore } from "./core/session.ts";
@@ -53,6 +54,7 @@ export class Router implements MessagingBridge {
     this.pairOpts = opts?.pairOpts;
     this.cfg = loadConfig();
     mkdirSync(PATHS.data, { recursive: true });
+    sweepDataDirs(); // old inbox/screenshots/shell-output cleanup; never throws hard
     if (!opts?.streamFn && !this.cfg.deepseek.apiKey) throw new Error("deepseek.apiKey not set in ani.json");
     this.streamFn =
       opts?.streamFn ??
