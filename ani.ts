@@ -69,6 +69,40 @@ async function main(): Promise<void> {
   }
 
   initLog(PATHS.logFile);
+
+  // single-instance guard: two anis on one config means QQ session-stealing
+  // loops and Telegram 409 conflicts (observed live when a test booted a
+  // second instance). Lock holds the pid; a stale lock (SIGKILL/crash) is
+  // detected via a liveness probe.
+  const lockFile = PATHS.data + "/ani.lock";
+  {
+    const { existsSync, readFileSync, writeFileSync, rmSync } = await import("node:fs");
+    if (existsSync(lockFile)) {
+      const pid = Number(readFileSync(lockFile, "utf8").trim());
+      if (pid && pid !== process.pid) {
+        let alive = false;
+        try {
+          process.kill(pid, 0);
+          alive = true;
+        } catch {
+          /* dead — stale lock */
+        }
+        if (alive) {
+          console.error(`ani is already running (pid ${pid}). Stop it first, or delete ${lockFile} if that pid is gone.`);
+          process.exit(1);
+        }
+      }
+    }
+    writeFileSync(lockFile, String(process.pid));
+    process.on("exit", () => {
+      try {
+        rmSync(lockFile, { force: true });
+      } catch {
+        /* best effort */
+      }
+    });
+  }
+
   const router = new Router();
   await router.init();
   log("ani", `v${ANI_VERSION} started. channels: ${router.channelNames().join(", ") || "(none)"}, model: ${router.model()}`);
