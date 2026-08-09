@@ -4,7 +4,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { download, httpGet, httpRequest, multipart } from "../core/net.ts";
+import { download, httpRequest, multipart } from "../core/net.ts";
 import { getConfig, PATHS, type ChannelConfig } from "../core/config.ts";
 import { error, log, warn } from "../core/log.ts";
 import type { Channel, InboundEvent } from "../core/types.ts";

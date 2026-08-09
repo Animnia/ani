@@ -5,7 +5,7 @@
  * cron delivery, MCP tool wiring, the messaging bridge.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { getConfig, loadConfig, PATHS, watchConfig, type Config } from "./core/config.ts";
+import { loadConfig, PATHS, watchConfig, type Config } from "./core/config.ts";
 import { approveCode, loadPending, PAIR_RENOTIFY, savePending, upsertPending } from "./core/pairing.ts";
 import { createDeepSeekStream } from "./core/deepseek.ts";
 import { runAgent } from "./core/agent.ts";
@@ -147,7 +147,7 @@ export class Router implements MessagingBridge {
 
     // abort any stale run for this chat — newest message wins
     this.running.get(chatKey)?.abort();
-    void this.queueFor(chatKey).push(() => this.runChat(chatKey, text));
+    void this.queueFor(chatKey).push(() => this.runChat(chatKey, text, { isGroup: evt.isGroup === true }));
   }
 
   private async handlePairing(channel: Channel, evt: InboundEvent): Promise<void> {
@@ -187,7 +187,7 @@ export class Router implements MessagingBridge {
 
   // ------------------------------------------------------------ agent run
 
-  private async runChat(chatKey: string, userText: string): Promise<void> {
+  private async runChat(chatKey: string, userText: string, opts?: { isGroup?: boolean }): Promise<void> {
     const controller = new AbortController();
     this.running.set(chatKey, controller);
     const [channelName, chatId] = splitChatKey(chatKey);
@@ -195,7 +195,16 @@ export class Router implements MessagingBridge {
       this.sessions.append(chatKey, { role: "user", content: userText, _meta: { ts: Date.now() } });
       await this.sessions.maybeCompact(chatKey, this.streamFn, this.cfg.model);
 
-      const system: Msg = { role: "system", content: buildSystemPrompt() };
+      let prompt = buildSystemPrompt();
+      if (opts?.isGroup) {
+        // privacy guard: group replies are visible to every member — the
+        // agent must not spill memory/files/personal data there
+        prompt +=
+          "\n\n<group_chat_notice>\nThis message came from a GROUP chat. Everyone in the group can read your replies. " +
+          "Do NOT reveal private data here: no memory contents, file contents, personal info, credentials, system paths/details beyond the obvious. " +
+          "If fulfilling the request needs private data, say so and ask the owner to continue in a private chat (DM) instead. Keep group replies short.\n</group_chat_notice>";
+      }
+      const system: Msg = { role: "system", content: prompt };
       const history = this.sessions.get(chatKey);
       const wire: Msg[] = [system, ...history];
       const before = wire.length;
