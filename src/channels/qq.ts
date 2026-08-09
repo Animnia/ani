@@ -43,9 +43,16 @@ export class QQChannel implements Channel {
   private msgSeq = new Map<string, number>();
   private chatTypes = new Map<string, ChatType>();
 
-  constructor(cfg: ChannelConfig, onMessage: (evt: InboundEvent) => void) {
+  /** endpoint overrides — tests inject a local mock gateway here */
+  private endpoints: { tokenUrl: string; apiBase: string };
+
+  constructor(cfg: ChannelConfig, onMessage: (evt: InboundEvent) => void, endpoints?: { tokenUrl?: string; apiBase?: string }) {
     this.cfg = cfg;
     this.onMessage = onMessage;
+    this.endpoints = {
+      tokenUrl: endpoints?.tokenUrl ?? TOKEN_URL,
+      apiBase: endpoints?.apiBase ?? API_BASE,
+    };
     // chatTypes are durable knowledge (which openid is a group vs a user) —
     // persist them so cron pushes after a restart hit the right endpoint.
     try {
@@ -80,7 +87,7 @@ export class QQChannel implements Channel {
 
   private async ensureToken(): Promise<string> {
     if (this.token && Date.now() < this.tokenExpiresAt - 60_000) return this.token;
-    const res = await httpRequest(TOKEN_URL, {
+    const res = await httpRequest(this.endpoints.tokenUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ appId: this.cfg.appId, clientSecret: this.cfg.clientSecret }),
@@ -96,7 +103,7 @@ export class QQChannel implements Channel {
 
   private async api<T = any>(method: string, path: string, body?: unknown, timeoutMs = 20_000): Promise<T> {
     const token = await this.ensureToken();
-    const res = await httpRequest(`${API_BASE}${path}`, {
+    const res = await httpRequest(`${this.endpoints.apiBase}${path}`, {
       method,
       headers: { Authorization: `QQBot ${token}`, "Content-Type": "application/json", "User-Agent": "ani/0.1" },
       body: body === undefined ? undefined : JSON.stringify(body),

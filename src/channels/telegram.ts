@@ -2,7 +2,7 @@
  * Telegram channel — Bot API long polling over HTTPS (proxy-supported).
  * No library: getUpdates / sendMessage / sendDocument / getFile via net.ts.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { download, httpGet, httpRequest, multipart } from "../core/net.ts";
 import { getConfig, PATHS, type ChannelConfig } from "../core/config.ts";
@@ -12,6 +12,7 @@ import { chunkText } from "./base.ts";
 
 const API = "https://api.telegram.org";
 const MAX_MSG = 4000;
+const OFFSET_FILE = join(PATHS.data, "telegram-offset.json");
 
 interface TgUpdate {
   update_id: number;
@@ -78,8 +79,38 @@ export class TelegramChannel implements Channel {
     const me = await this.api<{ username: string }>("getMe", {}, 15_000);
     this.botName = me.username;
     log("telegram", `authorized as @${this.botName}`);
+
+    // Resume from the persisted offset so a restart never reprocesses old
+    // updates (Telegram keeps unacknowledged updates for 24h). On the very
+    // first boot, skip the backlog entirely.
+    this.offset = this.loadOffset();
+    if (this.offset === 0) {
+      const last = await this.api<TgUpdate[]>("getUpdates", { offset: -1, timeout: 0 }, 15_000);
+      if (last.length) this.offset = last[last.length - 1].update_id + 1;
+      this.saveOffset();
+      log("telegram", `first boot — skipped backlog, offset=${this.offset}`);
+    }
+
     this.running = true;
     void this.pollLoop();
+  }
+
+  private loadOffset(): number {
+    try {
+      if (existsSync(OFFSET_FILE)) return Number(JSON.parse(readFileSync(OFFSET_FILE, "utf8")).offset) || 0;
+    } catch {
+      /* fall through */
+    }
+    return 0;
+  }
+
+  private saveOffset(): void {
+    try {
+      mkdirSync(PATHS.data, { recursive: true });
+      writeFileSync(OFFSET_FILE, JSON.stringify({ offset: this.offset }));
+    } catch {
+      /* non-fatal */
+    }
   }
 
   async stop(): Promise<void> {
@@ -106,6 +137,7 @@ export class TelegramChannel implements Channel {
             }
           }
         }
+        if (updates.length) this.saveOffset();
       } catch (e) {
         if (!this.running) break;
         warn("telegram", `poll error: ${e instanceof Error ? e.message : e} — retry in ${backoff / 1000}s`);
