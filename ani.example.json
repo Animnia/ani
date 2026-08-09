@@ -5,7 +5,8 @@
     "apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
     "baseUrl": "https://api.deepseek.com"
   },
-  "proxy": "http://127.0.0.1:6850",
+  "_proxy_note": "HTTP 代理地址（仅 telegram 等 useProxy=true 的通道使用）。留空 = 直连。常见端口: Clash 7890 / v2ray 10809",
+  "proxy": "",
   "channels": {
     "telegram": {
       "enabled": false,
