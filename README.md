@@ -16,13 +16,30 @@
 
 复杂度只长在**工具**里，不长在框架里。想加能力？加一个 `ToolDef` 或一个 skill 目录，不改核心。
 
-## 快速开始
+## 一句话安装
+
+**Linux / macOS:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Animnia/ani/main/install.sh | bash
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/Animnia/ani/main/install.ps1 | iex
+```
+
+安装器会：检测/安装 Node.js ≥ 24（winget 或官方压缩包，可选 `ANI_NODE_MIRROR` 镜像，如 `https://registry.npmmirror.com/-/binary/node`）→ 拉取 ani 到 `~/.ani` → 创建 `ani` 命令并加入 PATH → 生成 `ani.json` 配置模板。装完编辑 `ani.json` 填入密钥，新开终端运行 `ani`。重新运行安装命令即可升级。
+
+## 手动安装
 
 ```bash
 # 1. 需要 Node.js >= 24（原生运行 .ts，无需构建）
 node --version   # v24+
 
-# 2. 配置（首次启动会从 ani.example.json 生成 ani.json）
+# 2. 获取代码 + 配置
+git clone https://github.com/Animnia/ani.git && cd ani
 cp ani.example.json ani.json   # 填入 deepseek apiKey / 频道 token
 
 # 3. 启动
@@ -96,10 +113,10 @@ tests/              node:test 全套测试（严格超时）
 
 ```bash
 npm test                    # 全部（含真实网络集成测试 + e2e）
-node --test tests/net.test.ts        # 单跑某个
+node --test "tests/net.test.ts"      # 单跑某个
 ```
 
-集成测试需要网络（DeepSeek/Telegram 代理/QQ 网关）。QQ/TG 的**消息收发**测试需要你真人给 bot 发条消息——没有你的协助这部分无法自动化，属预期。
+集成测试需要网络 + 有效的 `ani.json`（DeepSeek key、Telegram 代理、QQ 网关）。QQ/TG 的**消息收发**测试需要你真人给 bot 发条消息——没有真人协助这部分无法自动化，属预期。
 
 ## 已知取舍
 
