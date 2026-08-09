@@ -5,7 +5,8 @@
  * process) can add owners to a running instance.
  */
 import { copyFileSync, existsSync, readFileSync, statSync, watch } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { log, warn } from "./log.ts";
 
 export interface ChannelConfig {
@@ -38,6 +39,16 @@ export interface Config {
 }
 
 export const ROOT = new URL("../../", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
+/** ani version — read from package.json so releases only bump one place. */
+export const ANI_VERSION: string = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json"), "utf8"));
+    return String(pkg.version ?? "dev");
+  } catch {
+    return "dev";
+  }
+})();
+
 export const PATHS = {
   root: ROOT,
   configFile: join(ROOT, "ani.json"),

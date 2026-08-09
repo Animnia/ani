@@ -5,7 +5,7 @@
  */
 import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { loadConfig, PATHS, type Config } from "./core/config.ts";
+import { ANI_VERSION, loadConfig, PATHS, type Config } from "./core/config.ts";
 import { httpRequest } from "./core/net.ts";
 
 type Verdict = "ok" | "warn" | "fail";
@@ -30,7 +30,7 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 }
 
 export async function runDoctor(): Promise<number> {
-  console.log("ani doctor\n");
+  console.log(`ani doctor — v${ANI_VERSION}\n`);
   let worst: Verdict = "ok";
   const bump = (v: Verdict) => {
     if (v === "fail") worst = "fail";

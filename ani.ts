@@ -7,7 +7,7 @@
  *   node ani.ts doctor          self-diagnosis (config, network, channels)
  */
 import { initLog, log, error } from "./src/core/log.ts";
-import { PATHS } from "./src/core/config.ts";
+import { ANI_VERSION, PATHS } from "./src/core/config.ts";
 import { Router } from "./src/router.ts";
 import { startCli } from "./src/cli.ts";
 
@@ -71,7 +71,7 @@ async function main(): Promise<void> {
   initLog(PATHS.logFile);
   const router = new Router();
   await router.init();
-  log("ani", `started. channels: ${router.channelNames().join(", ") || "(none)"}, model: ${router.model()}`);
+  log("ani", `v${ANI_VERSION} started. channels: ${router.channelNames().join(", ") || "(none)"}, model: ${router.model()}`);
 
   const shutdown = async (sig: string) => {
     log("ani", `shutting down (${sig})`);
