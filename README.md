@@ -100,6 +100,19 @@ node ani.ts approve ABC123       # 或另开一个终端（守护进程会热加
 /help /reset /approve CODE /chats /model /quit
 ```
 
+## 使用速查
+
+跟 ani 说话即可，例如：
+
+```
+定时任务：「每天早上 8 点给我发早报」        → 它会用 cron_manage 建任务并触发 daily-briefing skill
+记忆：    「记住我咖啡豆快喝完了，周五提醒我买」 → memory_write + cron
+文件：    「把 C:/reports 下最新的 pdf 发给我」  → shell + send_file
+浏览器：  「打开某网站帮我看看 XXX」           → browser 工具（真实 Chrome，登录态持久）
+```
+
+**自定义 skill**：在 `skills/<名字>/SKILL.md` 写 frontmatter（name + description）+ 步骤说明，ani 启动即发现，任务匹配时自动加载。`~/.agents/skills` 下的共享 skill 也会被收编。
+
 ## 目录结构
 
 ```

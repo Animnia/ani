@@ -188,6 +188,8 @@ export class TelegramChannel implements Channel {
     }
 
     if (!text && !files.length) return;
+    // typing indicator — best-effort, covers the agent's thinking time
+    this.api("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {});
     this.onMessage({
       channel: this.name,
       chatId,

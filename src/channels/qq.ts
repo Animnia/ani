@@ -298,6 +298,10 @@ export class QQChannel implements Channel {
     if (!chatId || !userId) return;
 
     let text = String(d.content ?? "").trim();
+    if (chatType === "group") {
+      // group @-messages carry the bot mention as a text prefix — strip it
+      text = text.replace(/^@\S+\s*/, "").trim();
+    }
     if (this.chatTypes.get(chatId) !== chatType) {
       this.chatTypes.set(chatId, chatType);
       this.persistChatTypes();

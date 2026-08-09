@@ -65,10 +65,11 @@ test("QQ group @-message maps to group chat", { timeout: 10_000 }, async () => {
     op: 0,
     t: "GROUP_AT_MESSAGE_CREATE",
     s: 5,
-    d: { id: "g1", content: "/hi there", group_openid: "GROUP9", author: { member_openid: "MEMBER1" } },
+    d: { id: "g1", content: "@ani_bot /hi there", group_openid: "GROUP9", author: { member_openid: "MEMBER1" } },
   });
   await new Promise((r) => setTimeout(r, 100));
   assert.equal(events.length, 1);
+  assert.equal(events[0].text, "/hi there", "bot mention stripped from group content");
   assert.equal(events[0].chatId, "GROUP9");
   assert.equal(events[0].userId, "MEMBER1");
   assert.equal(events[0].isGroup, true);

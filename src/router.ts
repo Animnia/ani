@@ -44,16 +44,23 @@ export class Router implements MessagingBridge {
   private tools: ToolDef[] = [];
   private chats = new Map<string, ChatEntry>();
   private chatsFile = joinData("chats.json");
+  /** test hook: redirect pairing file writes away from the real ani.json */
+  private pairOpts?: { pendingFile?: string; configFile?: string };
 
-  async init(): Promise<void> {
+  /** opts are test hooks: inject a fake streamFn / skip real channel startup /
+   *  redirect pairing files */
+  async init(opts?: { streamFn?: StreamFn; skipChannels?: boolean; pairOpts?: { pendingFile?: string; configFile?: string } }): Promise<void> {
+    this.pairOpts = opts?.pairOpts;
     this.cfg = loadConfig();
     mkdirSync(PATHS.data, { recursive: true });
-    if (!this.cfg.deepseek.apiKey) throw new Error("deepseek.apiKey not set in ani.json");
-    this.streamFn = createDeepSeekStream({
-      apiKey: this.cfg.deepseek.apiKey,
-      baseUrl: this.cfg.deepseek.baseUrl,
-      thinking: this.cfg.thinking,
-    });
+    if (!opts?.streamFn && !this.cfg.deepseek.apiKey) throw new Error("deepseek.apiKey not set in ani.json");
+    this.streamFn =
+      opts?.streamFn ??
+      createDeepSeekStream({
+        apiKey: this.cfg.deepseek.apiKey,
+        baseUrl: this.cfg.deepseek.baseUrl,
+        thinking: this.cfg.thinking,
+      });
     this.sessions = new SessionStore(PATHS.sessions, this.cfg.maxContextChars);
     this.loadChats();
 
@@ -72,19 +79,19 @@ export class Router implements MessagingBridge {
     this.tools.push(...mcpTools);
 
     // channels
-    if (this.cfg.channels.telegram?.enabled) {
-      const tg = new TelegramChannel(this.cfg.channels.telegram, (e) => void this.handleInbound(e));
-      this.channels.set("telegram", tg);
-    }
-    if (this.cfg.channels.qq?.enabled) {
-      const qq = new QQChannel(this.cfg.channels.qq, (e) => void this.handleInbound(e));
-      this.channels.set("qq", qq);
-    }
-    for (const ch of this.channels.values()) {
-      try {
-        await ch.start();
-      } catch (e) {
-        warn("router", `${ch.name} failed to start: ${e instanceof Error ? e.message : e}`);
+    if (!opts?.skipChannels) {
+      if (this.cfg.channels.telegram?.enabled) {
+        this.registerChannel(new TelegramChannel(this.cfg.channels.telegram, (e) => void this.handleInbound(e)));
+      }
+      if (this.cfg.channels.qq?.enabled) {
+        this.registerChannel(new QQChannel(this.cfg.channels.qq, (e) => void this.handleInbound(e)));
+      }
+      for (const ch of this.channels.values()) {
+        try {
+          await ch.start();
+        } catch (e) {
+          warn("router", `${ch.name} failed to start: ${e instanceof Error ? e.message : e}`);
+        }
       }
     }
     this.cron.start();
@@ -98,6 +105,11 @@ export class Router implements MessagingBridge {
         if (fresh && ch instanceof QQChannel) (ch as any).cfg.owners = fresh.owners;
       }
     });
+  }
+
+  /** Register a channel (used by init and by tests injecting fakes). */
+  registerChannel(ch: Channel): void {
+    this.channels.set(ch.name, ch);
   }
 
   async shutdown(): Promise<void> {
@@ -151,16 +163,17 @@ export class Router implements MessagingBridge {
   }
 
   private async handlePairing(channel: Channel, evt: InboundEvent): Promise<void> {
-    const p = upsertPending({ channel: evt.channel, userId: evt.userId, chatId: evt.chatId, userName: evt.userName });
+    const pf = this.pairOpts?.pendingFile;
+    const p = upsertPending({ channel: evt.channel, userId: evt.userId, chatId: evt.chatId, userName: evt.userName }, pf);
     log("router", `unauthorized ${evt.channel} user ${evt.userId} (${evt.userName ?? "?"}) — pairing code ${p.code}`);
     const now = Date.now();
     if (now - p.lastNotifiedAt > PAIR_RENOTIFY) {
       p.lastNotifiedAt = now;
-      const pending = loadPending();
+      const pending = loadPending(pf);
       const rec = pending.find((x) => x.code === p.code);
       if (rec) {
         rec.lastNotifiedAt = now;
-        savePending(pending);
+        savePending(pending, pf);
       }
       try {
         await channel.sendText(
@@ -175,7 +188,7 @@ export class Router implements MessagingBridge {
 
   /** Approve a pairing code. Works in-process (CLI slash command). */
   approve(code: string): string {
-    const p = approveCode(code);
+    const p = approveCode(code, this.pairOpts);
     if (!p) return `no pending pairing with code ${code}`;
     this.cfg = loadConfig();
     const ch = this.channels.get(p.channel);
