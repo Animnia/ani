@@ -1,12 +1,13 @@
 /**
  * ani — entry point.
  *
- *   node ani.ts                 start everything + interactive terminal
- *   node ani.ts --no-cli        daemon mode (channels + cron only)
- *   node ani.ts daemon <start|stop|restart|status>   background daemon control
- *   node ani.ts config [show] | config set <key> <v> inspect/edit ani.json safely
- *   node ani.ts approve <CODE>  approve a pairing code (works while daemon runs)
- *   node ani.ts doctor          self-diagnosis (config, network, channels)
+ *   ani                         start everything + interactive terminal
+ *   ani daemon <start|stop|restart|status>   background daemon control
+ *   ani config [show] | config set [--add] <key> <v> inspect/edit ani.json safely
+ *   ani approve <CODE>          approve a pairing code (works while daemon runs)
+ *   ani status | update | doctor | help
+ *
+ * (`ani` is the installer-created shim for `node <install-dir>/ani.ts`)
  */
 import { initLog, log, error } from "./src/core/log.ts";
 import { ANI_VERSION, PATHS } from "./src/core/config.ts";
@@ -39,19 +40,19 @@ async function main(): Promise<void> {
       [
         `ani v${ANI_VERSION} — 私人 Agent`,
         "",
-        "  node ani.ts                              启动（频道 + 交互终端）",
-        "  node ani.ts --no-cli                     纯守护模式（无终端）",
-        "  node ani.ts daemon start|stop|restart|status   后台守护进程管理",
-        "  node ani.ts config                       交互式配置向导",
-        "  node ani.ts config show                  查看配置（密钥脱敏）",
-        "  node ani.ts config set <key> <value>     修改配置（类型安全）",
-        "  node ani.ts approve <CODE>               批准 QQ/Telegram 配对码",
-        "  node ani.ts status                       运行状态总览",
-        "  node ani.ts update                       升级到最新版（不动配置/数据）",
-        "  node ani.ts doctor                       自检（配置/网络/频道/浏览器）",
-        "  node ani.ts help                         本帮助",
+        "  ani                              启动（频道 + 交互终端）",
+        "  ani daemon start|stop|restart|status   后台守护进程管理",
+        "  ani config                       交互式配置向导",
+        "  ani config show                  查看配置（密钥脱敏）",
+        "  ani config set [--add] <key> <value>   修改配置（--add 允许新增键）",
+        "  ani approve <CODE>               批准 QQ/Telegram 配对码",
+        "  ani status                       运行状态总览",
+        "  ani update                       升级到最新版（不动配置/数据）",
+        "  ani doctor                       自检（配置/网络/频道/浏览器）",
+        "  ani help                         本帮助",
         "",
-        "交互终端与 QQ/TG 聊天里都可以输入 / 命令（/new /status /chats /model /help）。",
+        "（ani 命令由安装器装入 PATH；没装的话等价于 node <安装目录>/ani.ts …）",
+        "交互终端与 QQ/TG 聊天里都可以输入 / 命令（/new /status /skills /show /help …）。",
       ].join("\n"),
     );
     return;

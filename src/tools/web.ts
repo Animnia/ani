@@ -1,11 +1,10 @@
 /**
  * Web tools, zero-dependency edition.
- * - web_search: Bing first (reachable directly in CN), DuckDuckGo HTML as
- *   fallback (via proxy). HTML scraping rots over time; errors are explicit
- *   so the agent can fall back to the browser tool.
+ * - web_search: Tavily API (real search API — no HTML scraping to rot).
+ *   Key from ani.json tavily.apiKey or TAVILY_API_KEY; direct first, then proxy.
  * - fetch_url: GET a page, HTML→plain text extraction, direct-then-proxy.
  */
-import { httpGet } from "../core/net.ts";
+import { httpGet, httpRequest } from "../core/net.ts";
 import { getConfig } from "../core/config.ts";
 import type { ToolDef } from "../core/types.ts";
 
@@ -44,48 +43,49 @@ interface SearchHit {
   snippet: string;
 }
 
-async function searchBing(q: string, proxy?: string): Promise<SearchHit[]> {
-  const url = `https://www.bing.com/search?q=${encodeURIComponent(q)}&count=10&setlang=zh-hans`;
-  const res = await httpGet(url, { headers: { "User-Agent": UA, "Accept-Language": "zh-CN,zh;q=0.9" }, proxy, timeoutMs: 20_000 });
-  if (res.status !== 200) throw new Error(`Bing HTTP ${res.status}`);
-  const html = res.body.toString("utf8");
-  const hits: SearchHit[] = [];
-  const blocks = html.split(/<li class="b_algo"/).slice(1);
-  for (const b of blocks) {
-    const m = /<h2[^>]*><a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/.exec(b);
-    if (!m) continue;
-    const pm = /<p[^>]*>([\s\S]*?)<\/p>/.exec(b);
-    hits.push({ title: stripTags(m[2]).slice(0, 200), url: m[1], snippet: pm ? stripTags(pm[1]).slice(0, 400) : "" });
-    if (hits.length >= 8) break;
-  }
-  return hits;
+interface TavilyResult {
+  answer?: string;
+  hits: SearchHit[];
 }
 
-async function searchDDG(q: string, proxy?: string): Promise<SearchHit[]> {
-  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`;
-  const res = await httpGet(url, { headers: { "User-Agent": UA }, proxy, timeoutMs: 20_000 });
-  if (res.status !== 200) throw new Error(`DuckDuckGo HTTP ${res.status}`);
-  const html = res.body.toString("utf8");
-  const hits: SearchHit[] = [];
-  const rx = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
-  const snipBlocks = html.split(/<a[^>]*class="result__snippet"/);
-  let m;
-  let i = 0;
-  while ((m = rx.exec(html)) && hits.length < 8) {
-    let u = m[1].replace(/&amp;/g, "&");
-    const ud = /[?&]uddg=([^&]+)/.exec(u);
-    if (ud) u = decodeURIComponent(ud[1]);
-    const snipPart = snipBlocks[i + 1];
-    const sm = snipPart ? />([\s\S]*?)<\/a>/.exec(snipPart) : null;
-    hits.push({ title: stripTags(m[2]).slice(0, 200), url: u, snippet: sm ? stripTags(sm[1]).slice(0, 400) : "" });
-    i++;
-  }
-  return hits;
+async function searchTavily(q: string, proxy?: string): Promise<TavilyResult> {
+  const key = getConfig().tavily?.apiKey;
+  if (!key) throw new Error("no tavily apiKey");
+  const res = await httpRequest("https://api.tavily.com/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: key,
+      query: q,
+      max_results: 8,
+      include_answer: "basic", // one-paragraph synthesized answer when available
+      search_depth: "basic",
+    }),
+    proxy,
+    timeoutMs: 25_000,
+  });
+  if (res.status !== 200) throw new Error(`Tavily HTTP ${res.status}: ${res.body.toString("utf8").slice(0, 200)}`);
+  const data = JSON.parse(res.body.toString("utf8")) as {
+    answer?: string | null;
+    results?: { title?: string; url?: string; content?: string }[];
+  };
+  const hits = (data.results ?? [])
+    .filter((r) => r.url)
+    .map((r) => ({ title: (r.title ?? "").slice(0, 200), url: String(r.url), snippet: (r.content ?? "").slice(0, 500) }));
+  return { answer: data.answer ?? undefined, hits };
+}
+
+/** Exported for tests: render the model-facing text block. */
+export function formatSearch(q: string, r: TavilyResult): string {
+  const parts: string[] = [];
+  if (r.answer) parts.push(`答案速览: ${r.answer}`);
+  parts.push(r.hits.map((h, i) => `${i + 1}. ${h.title}\n   ${h.url}\n   ${h.snippet}`).join("\n\n"));
+  return `[tavily: ${q}]\n` + parts.join("\n\n").slice(0, MAX_SEARCH_LEN);
 }
 
 export const webSearchTool: ToolDef = {
   name: "web_search",
-  description: "Search the web. Returns titles, URLs and snippets. For reading a page use fetch_url (or the browser tool for JS-heavy/login-walled sites).",
+  description: "Search the web (Tavily). Returns a synthesized answer plus titles, URLs and snippets. For reading a page use fetch_url (or the browser tool for JS-heavy/login-walled sites).",
   parameters: {
     type: "object",
     properties: {
@@ -96,26 +96,24 @@ export const webSearchTool: ToolDef = {
   async execute(args) {
     const q = String(args.query ?? "").trim();
     if (!q) return "Error: empty query";
+    if (!getConfig().tavily?.apiKey) {
+      return "Error: web_search needs a Tavily API key — set tavily.apiKey in ani.json (ani config set tavily.apiKey tvly-...) or env TAVILY_API_KEY";
+    }
     const proxy = getConfig().proxy;
     const errors: string[] = [];
-    for (const [name, fn, useProxy] of [
-      ["bing", searchBing, false],
-      ["bing+proxy", searchBing, true],
-      ["duckduckgo", searchDDG, true],
-    ] as const) {
+    for (const [label, p] of [["direct", undefined], ["proxy", proxy]] as const) {
       try {
-        const hits = await fn(q, useProxy ? proxy : undefined);
-        if (!hits.length) {
-          errors.push(`${name}: 0 results (markup may have changed)`);
+        const r = await searchTavily(q, p);
+        if (!r.hits.length) {
+          errors.push(`${label}: 0 results`);
           continue;
         }
-        const text = hits.map((h, i) => `${i + 1}. ${h.title}\n   ${h.url}\n   ${h.snippet}`).join("\n\n");
-        return `[via ${name}]\n` + text.slice(0, MAX_SEARCH_LEN);
+        return formatSearch(q, r);
       } catch (e) {
-        errors.push(`${name}: ${e instanceof Error ? e.message : e}`);
+        errors.push(`${label}: ${e instanceof Error ? e.message : e}`);
       }
     }
-    return "Error: all search backends failed:\n" + errors.join("\n") + "\nConsider the browser tool instead.";
+    return "Error: tavily search failed:\n" + errors.join("\n") + "\nConsider the browser tool instead.";
   },
 };
 

@@ -65,3 +65,17 @@ test("show: secrets are masked, structure intact", () => {
   assert.ok(out.includes("sk-tes"), out); // recognizable prefix
   assert.ok(!out.includes("_proxy_note"), out); // doc keys hidden from listing
 });
+
+test("set --add: creates new sections/keys with inferred types", () => {
+  assert.equal(setConfigValue("tavily.apiKey", "tvly-test-123", { allowNew: true }), null);
+  assert.equal(setConfigValue("fresh.flag", "true", { allowNew: true }), null);
+  assert.equal(setConfigValue("fresh.count", "42", { allowNew: true }), null);
+  const after = JSON.parse(readFileSync(process.env.ANI_CONFIG!, "utf8"));
+  assert.equal(after.tavily.apiKey, "tvly-test-123");
+  assert.equal(after.fresh.flag, true);
+  assert.equal(after.fresh.count, 42);
+  // without --add those same paths would have been refused
+  assert.ok(setConfigValue("another.new", "x")?.includes("--add"));
+  // and existing unknown-key protection is intact
+  assert.ok(setConfigValue("model.typo", "x")?.includes("unknown key"));
+});

@@ -105,10 +105,19 @@ test("QQ: token + gateway url", { timeout: 30_000, ...SKIP_QQ }, async () => {
   assert.match(data.url, /^wss:\/\//);
 });
 
-test("web_search returns results", { timeout: 45_000, ...needs(live, "network") }, async () => {
+test("web_search returns results (tavily)", { timeout: 45_000, ...needs(live, "network") }, async () => {
   const out = await webSearchTool.execute({ query: "DeepSeek V4 发布" }, ctx);
   assert.ok(!out.startsWith("Error"), out.slice(0, 300));
+  assert.match(out, /^\[tavily:/);
   assert.match(out, /http/);
+});
+
+test("formatSearch renders the synthesized answer and hits", { timeout: 10_000 }, async () => {
+  const { formatSearch } = await import("../src/tools/web.ts");
+  const txt = formatSearch("q", { answer: "速览", hits: [{ title: "t", url: "https://x", snippet: "s" }] });
+  assert.ok(txt.includes("[tavily: q]"), txt);
+  assert.ok(txt.includes("答案速览: 速览"), txt);
+  assert.ok(txt.includes("1. t"), txt);
 });
 
 test("fetch_url converts html to text", { timeout: 45_000, ...needs(live, "network") }, async () => {

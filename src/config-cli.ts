@@ -70,22 +70,34 @@ function coerce(raw: string, current: unknown): unknown {
   return raw;
 }
 
-/** Set an existing dotted key. Returns an error string, or null on success. */
-export function setConfigValue(path: string, raw: string): string | null {
+/** Set a dotted key. Existing keys are type-checked against the current
+ *  value; allowNew creates missing sections/keys (type inferred from the
+ *  string). Returns an error string, or null on success. */
+export function setConfigValue(path: string, raw: string, opts?: { allowNew?: boolean }): string | null {
   const obj = readRaw();
   const parts = path.split(".");
   let node: Json = obj;
   for (let i = 0; i < parts.length - 1; i++) {
     const next = node[parts[i]];
     if (!next || typeof next !== "object" || Array.isArray(next)) {
-      return `unknown key "${path}"（"${parts.slice(0, i + 1).join(".")}" 不是配置节）`;
+      if (opts?.allowNew && (next === undefined)) {
+        node[parts[i]] = {};
+        node = node[parts[i]] as Json;
+        continue;
+      }
+      return `unknown key "${path}"（"${parts.slice(0, i + 1).join(".")}" 不是配置节）${opts?.allowNew ? "" : "；确认要新增键请用 ani config set --add"}`;
     }
     node = next as Json;
   }
   const leaf = parts[parts.length - 1];
   if (!(leaf in node)) {
-    const sibs = Object.keys(node).filter((k) => !k.startsWith("_"));
-    return `unknown key "${path}"${sibs.length ? ` — 可用: ${sibs.join(", ")}` : ""}`;
+    if (!opts?.allowNew) {
+      const sibs = Object.keys(node).filter((k) => !k.startsWith("_"));
+      return `unknown key "${path}"${sibs.length ? ` — 可用: ${sibs.join(", ")}` : ""}；确认要新增请用 ani config set --add`;
+    }
+    node[leaf] = raw === "true" ? true : raw === "false" ? false : Number.isFinite(Number(raw)) && raw.trim() !== "" ? Number(raw) : raw;
+    writeRaw(obj);
+    return null;
   }
   try {
     node[leaf] = coerce(raw, node[leaf]);
@@ -154,12 +166,14 @@ export async function runConfig(args: string[]): Promise<void> {
     return;
   }
   if (sub === "set") {
-    const [, path, ...rest] = args;
+    const allowNew = args.includes("--add");
+    const rest2 = args.slice(1).filter((a) => a !== "--add");
+    const [path, ...rest] = rest2;
     if (!path || !rest.length) {
-      console.error("usage: ani config set <key> <value>   — 例: ani config set model deepseek-v4-pro");
+      console.error("usage: ani config set [--add] <key> <value>   — 例: ani config set model deepseek-v4-pro");
       process.exit(1);
     }
-    const err = setConfigValue(path, rest.join(" "));
+    const err = setConfigValue(path, rest.join(" "), { allowNew });
     if (err) {
       console.error(`✗ ${err}`);
       process.exit(1);

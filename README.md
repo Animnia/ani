@@ -93,7 +93,7 @@ node ani.ts approve ABC123       # 或另开一个终端（守护进程会热加
 | Skills | pi 式渐进披露：`skills/*/SKILL.md` 扫描进提示词，agent 按需读取；兼容 `~/.agents/skills`；`/skills on\|off <名>` 启停 |
 | MCP | `mcpServers` 配置，工具以 `mcp_<server>_<tool>` 挂载；stdio + streamable-HTTP |
 | 定时任务 | `cron_manage` 工具：`@every 30m` / `@daily 09:30` / 5 段 cron；结果推送到任意聊天。时刻按**服务器本地时区**解释 |
-| 联网 | `web_search`（Bing 直连 / DuckDuckGo 走代理）+ `fetch_url`（HTML→文本，直连失败自动走代理） |
+| 联网 | `web_search`（Tavily API，需 `tavily.apiKey` 或环境变量 `TAVILY_API_KEY`，免费额度 tavily.com 申请）+ `fetch_url`（HTML→文本，直连失败自动走代理） |
 | 浏览器 | `browser` 工具：CDP 驱动**真实 Chrome/Edge**（有头、持久 profile、去自动化标记）——网站看到的是回访真人，基本不触发人机验证 |
 | 文件收发 | 收到文件存 `data/inbox/<chat>/`；`send_file` 工具发到 QQ/TG（图片/文档） |
 | Markdown 渲染 | TG 自动转 HTML 渲染（**粗体**、代码块、链接等），发送失败自动回退纯文本；QQ 需平台 markdown 权限，开 `channels.qq.markdown=true` 后同样生效（失败回退） |

@@ -36,6 +36,8 @@ export interface Config {
   thinking?: "enabled" | "disabled";
   /** proxy URL, e.g. "http://127.0.0.1:6850". Used only where useProxy=true. */
   proxy?: string;
+  /** Tavily search API key (web_search tool). Env TAVILY_API_KEY works too. */
+  tavily?: { apiKey?: string };
   channels: { telegram?: ChannelConfig; qq?: ChannelConfig };
   mcpServers: Record<string, McpServerConfig>;
   maxContextChars: number;
@@ -96,6 +98,7 @@ export function loadConfig(): Config {
     },
     thinking: raw.thinking === "disabled" ? "disabled" : "enabled",
     proxy: raw.proxy,
+    tavily: { apiKey: raw.tavily?.apiKey ?? process.env.TAVILY_API_KEY ?? "" },
     channels: raw.channels ?? {},
     mcpServers: raw.mcpServers ?? {},
     maxContextChars: raw.maxContextChars ?? 600_000,

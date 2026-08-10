@@ -7,6 +7,10 @@
   },
   "_proxy_note": "HTTP 代理地址（仅 telegram 等 useProxy=true 的通道使用）。留空 = 直连。常见端口: Clash 7890 / v2ray 10809",
   "proxy": "",
+  "tavily": {
+    "_note": "web_search 工具的 Tavily API key，去 https://tavily.com 免费申请；也可用环境变量 TAVILY_API_KEY",
+    "apiKey": ""
+  },
   "channels": {
     "telegram": {
       "enabled": false,
