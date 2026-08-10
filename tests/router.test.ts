@@ -393,3 +393,25 @@ test("in-channel /skills and /show commands", { timeout: 30_000 }, async () => {
     files.cleanup();
   }
 });
+
+test("maxTokens from config reaches the stream function", { timeout: 30_000 }, async () => {
+  const files = tmpFiles();
+  try {
+    let seen: number | undefined;
+    const probe: StreamFn = async (params) => {
+      seen = params.maxTokens;
+      return { content: "ok", reasoning: "", toolCalls: [], finishReason: "stop" };
+    };
+    const { router } = await makeRouter(probe, files);
+    try {
+      await router.runCliTurn("hi", () => {}, () => {});
+      // default 8192 unless ani.json overrides — compare against live config
+      const { getConfig } = await import("../src/core/config.ts");
+      assert.equal(seen, getConfig().maxTokens);
+    } finally {
+      await router.shutdown();
+    }
+  } finally {
+    files.cleanup();
+  }
+});

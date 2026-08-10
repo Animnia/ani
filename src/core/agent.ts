@@ -18,6 +18,7 @@ export interface AgentRunOptions {
   ctx: ToolContext;
   events?: AgentEvents;
   maxRounds?: number;
+  maxTokens?: number;
   signal?: AbortSignal;
   /** prepare messages right before each API call (compaction hook) */
   beforeCall?: (messages: Msg[]) => Promise<Msg[]>;
@@ -96,6 +97,7 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
         model,
         messages: opts.beforeCall ? await opts.beforeCall(messages) : messages,
         tools: [],
+        maxTokens: opts.maxTokens,
         signal,
         onTextDelta: events?.onTextDelta,
       });
@@ -115,6 +117,7 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
       model,
       messages: toSend,
       tools: wireTools,
+      maxTokens: opts.maxTokens,
       signal,
       onTextDelta: events?.onTextDelta,
       onReasoningDelta: events?.onReasoningDelta,

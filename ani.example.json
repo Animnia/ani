@@ -27,5 +27,6 @@
     }
   },
   "mcpServers": {},
-  "maxContextChars": 600000
+  "maxContextChars": 600000,
+  "maxTokens": 8192
 }

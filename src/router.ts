@@ -385,6 +385,7 @@ export class Router implements MessagingBridge {
         tools: this.tools,
         streamFn: this.streamFn,
         model: this.cfg.model,
+        maxTokens: this.cfg.maxTokens,
         signal: controller.signal,
         ctx: {
           chatKey,
@@ -446,6 +447,7 @@ export class Router implements MessagingBridge {
         tools: this.tools,
         streamFn: this.streamFn,
         model: this.cfg.model,
+        maxTokens: this.cfg.maxTokens,
         signal: controller.signal,
         // ctx points at the DELIVERY TARGET (not the cron session) so that
         // send_message/send_file without an explicit chatKey land where the
@@ -512,6 +514,7 @@ export class Router implements MessagingBridge {
       tools: this.tools,
       streamFn: this.streamFn,
       model: this.cfg.model,
+      maxTokens: this.cfg.maxTokens,
       ctx: { chatKey, channel: "cli", chatId: "local", cwd: PATHS.root },
       events: {
         onTextDelta: onDelta,

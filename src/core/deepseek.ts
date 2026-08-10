@@ -8,6 +8,7 @@
  * - no vision: text only
  */
 import { postSSE } from "./net.ts";
+import { log } from "./log.ts";
 import type { Msg, StreamFn, StreamParams, StreamResult, ToolCall } from "./types.ts";
 
 export interface DeepSeekOpts {
@@ -138,6 +139,10 @@ async function streamOnce(opts: DeepSeekOpts, params: StreamParams): Promise<Str
       throw new Error(`DeepSeek API ${res.status}: ${res.body.slice(0, 500)}`);
     }
     if (apiError) throw new Error(`DeepSeek API error: ${apiError}`);
+    if (finishReason === "length") {
+      // discoverability > silence: a cut-off answer looks like a model bug
+      log("deepseek", `output truncated at max_tokens=${payload.max_tokens} (finish_reason=length) — raise maxTokens in ani.json`);
+    }
 
     return {
       content,

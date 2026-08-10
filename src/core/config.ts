@@ -41,6 +41,8 @@ export interface Config {
   channels: { telegram?: ChannelConfig; qq?: ChannelConfig };
   mcpServers: Record<string, McpServerConfig>;
   maxContextChars: number;
+  /** output cap per API call (tokens). Raise if replies get cut mid-answer. */
+  maxTokens: number;
 }
 
 export const ROOT = new URL("../../", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
@@ -102,6 +104,7 @@ export function loadConfig(): Config {
     channels: raw.channels ?? {},
     mcpServers: raw.mcpServers ?? {},
     maxContextChars: raw.maxContextChars ?? 600_000,
+    maxTokens: raw.maxTokens ?? 8192,
   };
   current = cfg;
   try {
