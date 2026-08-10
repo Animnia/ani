@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chunkText, DedupSet } from "../src/channels/base.ts";
 import { QQChannel } from "../src/channels/qq.ts";
+import { TelegramChannel } from "../src/channels/telegram.ts";
 import type { InboundEvent } from "../src/core/types.ts";
 
 test("chunkText splits at boundaries", { timeout: 5000 }, () => {
@@ -118,4 +119,89 @@ test("QQ sendText posts chunked messages with msg_id", { timeout: 10_000 }, asyn
   (qq as any).chatTypes.set("G1", "group");
   await qq.sendText("G1", "hi group");
   assert.equal(posted[2].path, "/v2/groups/G1/messages");
+});
+
+// ---------------------------------------------------------------- markdown
+
+function makeTG(owners: string[] = []): InstanceType<typeof TelegramChannel> {
+  return new TelegramChannel({ enabled: false, token: "x", owners }, () => {});
+}
+
+test("TG sendText renders markdown as HTML by default", { timeout: 10_000 }, async () => {
+  const tg = makeTG();
+  const sent: any[] = [];
+  (tg as any).api = async (_m: string, body: any) => { sent.push(body); return {}; };
+  await tg.sendText("c1", "**bold** and `code`");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].parse_mode, "HTML");
+  assert.ok(sent[0].text.includes("<b>bold</b>"), sent[0].text);
+  assert.ok(sent[0].text.includes("<code>code</code>"), sent[0].text);
+});
+
+test("TG sendText falls back to plain text when HTML is rejected", { timeout: 10_000 }, async () => {
+  const tg = makeTG();
+  const sent: any[] = [];
+  (tg as any).api = async (_m: string, body: any) => {
+    if (body.parse_mode) throw new Error("Telegram sendMessage: Bad Request: can't parse entities");
+    sent.push(body);
+    return {};
+  };
+  await tg.sendText("c1", "**bold**");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].parse_mode, undefined);
+  assert.equal(sent[0].text, "**bold**");
+});
+
+test("TG sendText with markdown:false sends plain directly", { timeout: 10_000 }, async () => {
+  const tg = new TelegramChannel({ enabled: false, token: "x", owners: [], markdown: false }, () => {});
+  const sent: any[] = [];
+  (tg as any).api = async (_m: string, body: any) => { sent.push(body); return {}; };
+  await tg.sendText("c1", "**bold**");
+  assert.equal(sent[0].parse_mode, undefined);
+});
+
+test("TG catch-up: stale downtime messages notify owners and get skipped", { timeout: 10_000 }, async () => {
+  const tg = makeTG(["owner1"]);
+  const now = Math.floor(Date.now() / 1000);
+  const notices: string[] = [];
+  (tg as any).offset = 100;
+  (tg as any).saveOffset = () => {}; // never touch real state
+  (tg as any).api = async (method: string) => {
+    if (method !== "getUpdates") throw new Error("unexpected " + method);
+    return [
+      { update_id: 100, message: { message_id: 1, date: now - 3600, from: { id: "owner1" }, chat: { id: 55, type: "private" }, text: "old" } },
+      { update_id: 101, message: { message_id: 2, date: now - 3600, from: { id: "stranger" }, chat: { id: 66, type: "private" }, text: "spam" } },
+      { update_id: 102, message: { message_id: 3, date: now - 5, from: { id: "owner1" }, chat: { id: 55, type: "private" }, text: "fresh" } },
+    ];
+  };
+  (tg as any).sendText = async (cid: string, text: string) => { notices.push(`${cid}:${text}`); };
+  await (tg as any).catchUpMissed();
+  // owner chat 55 notified once (stranger chat never), offset skips ONLY stale
+  assert.equal(notices.length, 1);
+  assert.ok(notices[0].startsWith("55:"), notices[0]);
+  assert.ok(notices[0].includes("1 条"), notices[0]);
+  assert.equal((tg as any).offset, 102); // 102 (fresh) stays for the poll loop
+});
+
+test("QQ markdown: opt-in sends msg_type 3, failure falls back to text", { timeout: 10_000 }, async () => {
+  const tmp = join(mkdtempSync(join(tmpdir(), "ani-qq-")), "types.json");
+  const qq = new QQChannel({ enabled: false, appId: "x", clientSecret: "y", owners: [], markdown: true }, () => {}, { typesFile: tmp });
+  (qq as any).chatTypes.set("U1", "c2c");
+  const posted: any[] = [];
+  (qq as any).api = async (_m: string, _p: string, body: any) => { posted.push(body); return {}; };
+  await qq.sendText("U1", "**hi**");
+  assert.equal(posted[0].msg_type, 3);
+  assert.equal(posted[0].markdown.content, "**hi**");
+
+  // rejection → plain fallback for that chunk
+  posted.length = 0;
+  (qq as any).api = async (_m: string, _p: string, body: any) => {
+    if (body.msg_type === 3) throw new Error("QQ: markdown not permitted");
+    posted.push(body);
+    return {};
+  };
+  await qq.sendText("U1", "**hi**");
+  assert.equal(posted.length, 1);
+  assert.equal(posted[0].msg_type, 0);
+  assert.equal(posted[0].content, "**hi**");
 });

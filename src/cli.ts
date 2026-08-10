@@ -1,8 +1,9 @@
 /**
- * Interactive terminal chat. pi-style minimalism: plain readline plus the
- * three things that matter in daily use — colors, a live slash-command
- * preview (type `/`, candidates appear under the input; Tab completes),
- * and markdown-rendered streaming replies. All decoration is TTY-only;
+ * Interactive terminal chat. pi-style minimalism: plain readline plus
+ * colors and markdown-rendered streaming replies. Slash discovery is
+ * readline-native (type `/`, press Tab) — a hand-rolled live menu was
+ * tried and corrupted readline's cursor bookkeeping (lost cursor, broken
+ * newlines); native completion never desyncs. All decoration is TTY-only;
  * piped stdio gets plain text so scripts and tests see stable output.
  */
 import { createInterface, type Interface } from "node:readline";
@@ -39,7 +40,7 @@ export function startCli(router: Router): void {
 
   // ---- startup banner (keep the literal "ani is up" — tests + scripts grep it)
   process.stdout.write(
-    `\n ${bold(cyan(`ani v${ANI_VERSION}`))} ${dim(`· ${router.model()} · 输入即对话，键入 / 预览命令`)}\n`,
+    `\n ${bold(cyan(`ani v${ANI_VERSION}`))} ${dim(`· ${router.model()} · 输入即对话；键入 / 后按 Tab 预览命令`)}\n`,
   );
   process.stdout.write("ani is up. Channels: " + (router.channelNames().join(", ") || "(none)") + " — /help for commands\n");
 
@@ -48,25 +49,7 @@ export function startCli(router: Router): void {
   };
   prompt();
 
-  // ---- live slash preview: as you type "/", matching commands render below
-  // the input line via save/restore-cursor. TTY only.
-  const clearBelow = () => process.stdout.write("\x1b7\x1b[0J\x1b8");
-  if (process.stdout.isTTY) {
-    rl.input.on("keypress", () =>
-      setImmediate(() => {
-        clearBelow();
-        const line = rl.line;
-        if (!line.startsWith("/") || line.includes(" ")) return;
-        const hits = COMMANDS.filter((c) => c.name.startsWith(line));
-        if (!hits.length || (hits.length === 1 && hits[0].name === line)) return;
-        const menu = hits.map((c) => `  ${cyan(c.name.padEnd(10))}${gray(c.desc)}`).join("\n");
-        process.stdout.write(`\x1b7\x1b[0J\n${dim("命令:")}\n${menu}\x1b8`);
-      }),
-    );
-  }
-
   rl.on("line", (line) => {
-    if (process.stdout.isTTY) clearBelow();
     const text = line.trim();
     void (async () => {
       if (!text) {
@@ -103,6 +86,14 @@ export function startCli(router: Router): void {
             },
             (name, ok, preview) => {
               process.stdout.write(gray(` ${ok ? "✓" : "✗"} ${preview}`) + "\n");
+            },
+            (name) => {
+              // flush any half-rendered line BEFORE tool status lines, or
+              // buffered text would surface after them (wrong visual order)
+              if (streaming && useColor) md.end();
+              if (streaming) process.stdout.write("\n");
+              streaming = false;
+              process.stdout.write(gray(` ⚙ ${name}...`));
             },
           );
           if (useColor) md.end();

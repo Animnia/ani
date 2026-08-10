@@ -294,3 +294,48 @@ test("session status: usage ledger aggregates provider tokens across calls", { t
     files.cleanup();
   }
 });
+
+test("in-channel slash commands: known commands intercepted, unknown pass to agent", { timeout: 30_000 }, async () => {
+  const files = tmpFiles();
+  try {
+    const echo: StreamFn = async ({ messages }) => ({
+      content: "REPLY: " + messages[messages.length - 1].content,
+      reasoning: "",
+      toolCalls: [],
+      finishReason: "stop",
+    });
+    const { router, channel } = await makeRouter(echo, files);
+    try {
+      channel.owners.push("u1");
+
+      // /status → stats reply, agent NOT involved
+      await (router as any).handleInbound(evt("u1", "/status"));
+      await waitFor(() => channel.sent.some((m) => m.text.includes("会话 fake:u1")), "status reply");
+      assert.ok(channel.sent[0].text.includes("消息 0 条"), channel.sent[0].text);
+
+      // a normal message → agent reply (establishes history)
+      await (router as any).handleInbound(evt("u1", "hello world"));
+      await waitFor(() => channel.sent.some((m) => m.text === "REPLY: hello world"), "agent reply");
+
+      // /new → confirmation, session cleared
+      await (router as any).handleInbound(evt("u1", "/new"));
+      await waitFor(() => channel.sent.some((m) => m.text.includes("新会话已开始")), "new reply");
+      assert.equal(router.sessionStatus("fake:u1").messages, 0);
+
+      // unknown slash text → flows to the agent untouched (linux paths!)
+      await (router as any).handleInbound(evt("u1", "/etc/passwd 是什么"));
+      await waitFor(() => channel.sent.some((m) => m.text.includes("REPLY: /etc/passwd")), "passthrough");
+
+      // /help lists channel commands
+      await (router as any).handleInbound(evt("u1", "/help"));
+      await waitFor(
+        () => channel.sent.some((m) => m.text.includes("/new") && m.text.includes("/status")),
+        "help reply",
+      );
+    } finally {
+      await router.shutdown();
+    }
+  } finally {
+    files.cleanup();
+  }
+});

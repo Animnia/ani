@@ -96,6 +96,7 @@ node ani.ts approve ABC123       # 或另开一个终端（守护进程会热加
 | 浏览器 | `browser` 工具：CDP 驱动**真实 Chrome/Edge**（有头、持久 profile、去自动化标记）——网站看到的是回访真人，基本不触发人机验证 |
 | 文件收发 | 收到文件存 `data/inbox/<chat>/`；`send_file` 工具发到 QQ/TG（图片/文档） |
 | Markdown 渲染 | TG 自动转 HTML 渲染（**粗体**、代码块、链接等），发送失败自动回退纯文本；QQ 需平台 markdown 权限，开 `channels.qq.markdown=true` 后同样生效（失败回退） |
+| 掉线提醒 | ani 不在线期间发到 Telegram 的消息，重启后逐聊通知“错过了 N 条，请重发”并跳过旧消息（防止过期指令被延迟执行）；QQ 网关不补发离线消息，属平台限制 |
 | 终端体验 | 彩色输出、流式 markdown 渲染、键入 `/` 实时预览命令（Tab 补全） |
 
 ## CLI 命令
@@ -108,9 +109,11 @@ node ani.ts approve ABC123       # 或另开一个终端（守护进程会热加
 | `/new` | 开启全新会话（旧会话归档在 `sessions/*.archive.jsonl`，不丢） |
 | `/status` | 当前会话：消息数、上下文占用、token 用量（真实 API 统计）、压缩次数 |
 | `/chats` | 列出已知会话（QQ/TG/CLI） |
-| `/approve <code>` | 批准配对码 |
+| `/approve <code>` | 批准配对码（仅 CLI） |
 | `/model` | 查看当前模型（改 ani.json 热更新） |
-| `/quit` | 退出 |
+| `/quit` | 退出（仅 CLI） |
+
+**QQ/Telegram 聊天里同样可用** `/new` `/status` `/chats` `/model` `/help`（仅主人）。未匹配的 `/` 开头文本（如 Linux 路径）照常发给 AI。
 
 ## 常驻后台运行
 

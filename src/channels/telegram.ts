@@ -90,10 +90,53 @@ export class TelegramChannel implements Channel {
       if (last.length) this.offset = last[last.length - 1].update_id + 1;
       this.saveOffset();
       log("telegram", `first boot — skipped backlog, offset=${this.offset}`);
+    } else {
+      await this.catchUpMissed();
     }
 
     this.running = true;
     void this.pollLoop();
+  }
+
+  /** Messages that arrived while ani was down would otherwise be executed
+   *  late (a stale "重启电脑" firing at boot is a real hazard) or silently
+   *  ignored. Instead: tell each affected owner chat what was missed, then
+   *  skip the stale part of the backlog. Fresh messages (<2min, e.g. a
+   *  quick daemon restart) are left for the normal poll loop. */
+  private async catchUpMissed(): Promise<void> {
+    let pending: TgUpdate[];
+    try {
+      pending = await this.api<TgUpdate[]>("getUpdates", { offset: this.offset, timeout: 0, limit: 100 }, 15_000);
+    } catch (e) {
+      warn("telegram", "catch-up peek failed (continuing):", e);
+      return;
+    }
+    const nowSec = Date.now() / 1000;
+    const stale = pending.filter((u) => (u.message?.date ?? nowSec) < nowSec - 120);
+    if (!stale.length) return;
+
+    const missed = new Map<string, number>();
+    for (const u of stale) {
+      const m = u.message;
+      if (!m) continue;
+      if (!this.isOwner(String(m.from?.id ?? ""))) continue;
+      const cid = String(m.chat.id);
+      missed.set(cid, (missed.get(cid) ?? 0) + 1);
+    }
+    for (const [cid, n] of missed) {
+      try {
+        await this.sendText(cid, `ani 刚才不在线，错过了你发的 ${n} 条消息 😥 现已恢复，请重新发送～`);
+      } catch (e) {
+        warn("telegram", `missed-message notice to ${cid} failed:`, e);
+      }
+      log("telegram", `notified ${cid} about ${n} message(s) missed while down`);
+    }
+    // skip exactly the stale prefix; update_ids are monotonic
+    const maxStale = Math.max(...stale.map((u) => u.update_id));
+    if (maxStale >= this.offset) {
+      this.offset = maxStale + 1;
+      this.saveOffset();
+    }
   }
 
   private loadOffset(): number {

@@ -33,6 +33,30 @@ async function main(): Promise<void> {
     return;
   }
 
+  // usage overview
+  if (args[0] === "help" || args[0] === "--help" || args[0] === "-h") {
+    console.log(
+      [
+        `ani v${ANI_VERSION} — 私人 Agent`,
+        "",
+        "  node ani.ts                              启动（频道 + 交互终端）",
+        "  node ani.ts --no-cli                     纯守护模式（无终端）",
+        "  node ani.ts daemon start|stop|restart|status   后台守护进程管理",
+        "  node ani.ts config                       交互式配置向导",
+        "  node ani.ts config show                  查看配置（密钥脱敏）",
+        "  node ani.ts config set <key> <value>     修改配置（类型安全）",
+        "  node ani.ts approve <CODE>               批准 QQ/Telegram 配对码",
+        "  node ani.ts status                       运行状态总览",
+        "  node ani.ts update                       升级到最新版（不动配置/数据）",
+        "  node ani.ts doctor                       自检（配置/网络/频道/浏览器）",
+        "  node ani.ts help                         本帮助",
+        "",
+        "交互终端与 QQ/TG 聊天里都可以输入 / 命令（/new /status /chats /model /help）。",
+      ].join("\n"),
+    );
+    return;
+  }
+
   if (args[0] === "doctor") {
     const { runDoctor } = await import("./src/doctor.ts");
     process.exit(await runDoctor());

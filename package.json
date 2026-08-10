@@ -1,6 +1,6 @@
 {
   "name": "ani",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A tiny personal agent: DeepSeek brain, QQ/Telegram body, pi soul.",
   "type": "module",
   "engines": {

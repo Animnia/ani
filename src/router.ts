@@ -193,6 +193,17 @@ export class Router implements MessagingBridge {
 
     this.rememberChat(chatKey, evt.channel, evt.chatId, evt.userName ?? evt.userId);
 
+    // in-channel slash commands (owner-only — we passed the gate above).
+    // Only KNOWN commands are intercepted; other "/..." text (linux paths,
+    // model shorthand) flows to the agent as usual.
+    if (evt.text.trim().startsWith("/")) {
+      const reply = this.channelCommand(chatKey, evt.text.trim());
+      if (reply !== null) {
+        await channel.sendText(evt.chatId, reply);
+        return;
+      }
+    }
+
     let text = evt.text;
     if (evt.files?.length) {
       const lines = evt.files.map((f) => `[收到文件] ${f.name} (${f.size} bytes) 已保存到 ${f.path}`);
@@ -229,11 +240,50 @@ export class Router implements MessagingBridge {
       try {
         await channel.sendText(
           evt.chatId,
-          `我是 Ani，主人的私人 Agent。你还不是我的主人。\n如果这是主人的账号，让主人在装了 ani 的终端运行:\n  ani approve ${p.code}\n（或在 ani 的交互终端里输入 /approve ${p.code}）\n配对码 30 分钟内有效。`,
+          `我是 Ani，主人的私人 Agent。你还不是我的主人。\n如果这是主人的账号，让主人在装了 ani 的终端运行:\n  ani approve ${p.code}\n（若提示找不到 ani 命令，用完整路径：node ${PATHS.root}ani.ts approve ${p.code}；或在 ani 的交互终端里输入 /approve ${p.code}）\n配对码 30 分钟内有效，过期后重新发消息会生成新码。`,
         );
       } catch (e) {
         warn("router", "pairing reply failed:", e);
       }
+    }
+  }
+
+  /** Slash commands available inside QQ/Telegram chats. Returns the reply
+   *  text, or null when the text isn't a known command (pass to agent). */
+  private channelCommand(chatKey: string, text: string): string | null {
+    const [cmd] = text.slice(1).split(/\s+/);
+    switch (cmd) {
+      case "help":
+        return [
+          "可用命令：",
+          "/new     开启全新会话（旧会话归档保留）",
+          "/status  会话状态：消息数 / 上下文 / token 用量",
+          "/chats   列出已知会话",
+          "/model   查看当前模型",
+          "/help    本帮助",
+          "其它内容直接发给 ani 即可。",
+        ].join("\n");
+      case "new":
+        this.resetSession(chatKey);
+        return "新会话已开始（旧会话已归档）🌱";
+      case "status": {
+        const s = this.sessionStatus(chatKey);
+        const pct = s.maxChars ? Math.round((s.chars / s.maxChars) * 100) : 0;
+        return [
+          `会话 ${chatKey}`,
+          `消息 ${s.messages} 条 · 上下文 ${s.chars.toLocaleString()}/${s.maxChars.toLocaleString()} 字符 (${pct}%) · 压缩 ${s.compactions} 次`,
+          s.usage
+            ? `token：${s.usage.prompt.toLocaleString()} in / ${s.usage.completion.toLocaleString()} out（本次进程 ${s.usage.calls} 次调用）`
+            : "token：本次进程还没有 API 调用",
+          `模型 ${s.model} · thinking ${s.thinking}`,
+        ].join("\n");
+      }
+      case "chats":
+        return this.listChats().map((c) => `${c.chatKey}${c.hint ? `（${c.hint}）` : ""}`).join("\n");
+      case "model":
+        return `当前模型：${this.cfg.model}（改 ani.json 的 model 字段即热更新）`;
+      default:
+        return null; // not a known command — treat as normal text
     }
   }
 
@@ -388,7 +438,12 @@ export class Router implements MessagingBridge {
   }
 
   /** Used by the CLI to run a local turn (streaming to stdout). */
-  async runCliTurn(text: string, onDelta: (d: string) => void, onTool: (name: string, ok: boolean, preview: string) => void): Promise<string> {
+  async runCliTurn(
+    text: string,
+    onDelta: (d: string) => void,
+    onTool: (name: string, ok: boolean, preview: string) => void,
+    onToolStart?: (name: string) => void,
+  ): Promise<string> {
     const chatKey = "cli:local";
     this.sessions.append(chatKey, { role: "user", content: text, _meta: { ts: Date.now() } });
     await this.sessions.maybeCompact(chatKey, this.streamFn, this.cfg.model);
@@ -402,7 +457,7 @@ export class Router implements MessagingBridge {
       ctx: { chatKey, channel: "cli", chatId: "local", cwd: PATHS.root },
       events: {
         onTextDelta: onDelta,
-        onToolStart: (name) => process.stdout.write(`\n\x1b[90m⚙ ${name}...\x1b[0m`),
+        onToolStart: onToolStart ?? ((name) => process.stdout.write(`\n\x1b[90m⚙ ${name}...\x1b[0m`)),
         onToolEnd: (name, ok, preview) => onTool(name, ok, preview),
       },
     });
