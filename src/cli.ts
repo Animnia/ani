@@ -9,7 +9,7 @@
 import { createInterface, type Interface } from "node:readline";
 import { ANI_VERSION } from "./core/config.ts";
 import { TerminalMdStream } from "./core/markdown.ts";
-import { bold, cyan, dim, gray, green, red, useColor, yellow } from "./core/ansi.ts";
+import { bold, cyan, dim, gray, green, red, rgb, useColor, yellow } from "./core/ansi.ts";
 import type { Router } from "./router.ts";
 
 /** Single source of truth: /help, Tab completion and the live preview all
@@ -26,6 +26,29 @@ const COMMANDS: { name: string; args: string; desc: string }[] = [
   { name: "/quit", args: "", desc: "退出" },
 ];
 
+// ---- the big pink Ani logo (TTY only; piped output stays clean for tests/scripts)
+const LOGO = [
+  " █████╗ ███╗   ██╗██╗",
+  "██╔══██╗████╗  ██║██║",
+  "███████║██╔██╗ ██║██║",
+  "██╔══██║██║╚██╗██║██║",
+  "██║  ██║██║ ╚████║██║",
+  "╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝",
+];
+const PINK_TOP: [number, number, number] = [255, 183, 220]; // 浅粉
+const PINK_BOT: [number, number, number] = [255, 20, 147]; // 深粉
+
+function printLogo(): void {
+  if (!useColor) return;
+  LOGO.forEach((line, i) => {
+    const t = i / (LOGO.length - 1);
+    const r = Math.round(PINK_TOP[0] + (PINK_BOT[0] - PINK_TOP[0]) * t);
+    const g = Math.round(PINK_TOP[1] + (PINK_BOT[1] - PINK_TOP[1]) * t);
+    const b = Math.round(PINK_TOP[2] + (PINK_BOT[2] - PINK_TOP[2]) * t);
+    process.stdout.write(rgb(r, g, b)(line) + "\n");
+  });
+}
+
 export function startCli(router: Router): void {
   const rl: Interface = createInterface({
     input: process.stdin,
@@ -41,6 +64,7 @@ export function startCli(router: Router): void {
   let queued: string | null = null; // one-deep queue for input typed mid-run
 
   // ---- startup banner (keep the literal "ani is up" — tests + scripts grep it)
+  printLogo();
   process.stdout.write(
     `\n ${bold(cyan(`ani v${ANI_VERSION}`))} ${dim(`· ${router.model()} · 输入即对话；键入 / 后按 Tab 预览命令`)}\n`,
   );

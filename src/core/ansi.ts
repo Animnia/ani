@@ -20,3 +20,7 @@ export const green = wrap("\x1b[32m", "\x1b[39m");
 export const yellow = wrap("\x1b[33m", "\x1b[39m");
 export const cyan = wrap("\x1b[36m", "\x1b[39m");
 export const gray = wrap("\x1b[90m", "\x1b[39m");
+
+/** 24-bit truecolor foreground (no-op string passthrough when !useColor). */
+export const rgb = (r: number, g: number, b: number) => (s: string): string =>
+  useColor ? `\x1b[38;2;${r};${g};${b}m${s}\x1b[39m` : s;
