@@ -58,6 +58,25 @@ test("ani boots, channels connect, CLI agent turn works", { timeout: 180_000, ..
     child.stdin.write("/chats\n"); // eslint-disable-line
     await new Promise((r) => setTimeout(r, 2000));
     assert.match(out, /cli:local/);
+
+    // paste simulation: three lines in ONE write must become ONE user message
+    child.stdin.write("PASTE_LINE_A\nPASTE_LINE_B\nPASTE_LINE_C\n");
+    const pasteDeadline = Date.now() + 120_000;
+    let merged = false;
+    while (Date.now() < pasteDeadline) {
+      try {
+        const sess = readFileSync(join(dir, "data", "sessions", "cli_local.jsonl"), "utf8");
+        const userMsgs = sess.split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((m) => m.role === "user");
+        if (userMsgs.some((m) => m.content === "PASTE_LINE_A\nPASTE_LINE_B\nPASTE_LINE_C")) {
+          merged = true;
+          break;
+        }
+      } catch {
+        /* session file not flushed yet */
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    assert.ok(merged, `pasted lines were not merged into one message.\nstdout:\n${out}`);
   } finally {
     await kill();
     rmSync(dir, { recursive: true, force: true });

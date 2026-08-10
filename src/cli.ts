@@ -75,82 +75,97 @@ export function startCli(router: Router): void {
   };
   prompt();
 
+  // Pasted text arrives as a burst of line events (readline splits on \n)
+  // — without merging, every pasted line would EXECUTE as its own message.
+  // Burst-merge: lines arriving within 50ms of each other are one input.
+  // A human can't hit Enter twice in 50ms; a paste is all-but-instant.
+  let pasteBuf: string | null = null;
+  let pasteTimer: NodeJS.Timeout | null = null;
   rl.on("line", (line) => {
-    const text = line.trim();
-    void (async () => {
-      if (!text) {
-        prompt();
-        return;
-      }
-      if (text.startsWith("/")) {
-        await command(text);
-        prompt();
-        return;
-      }
-      if (busy) {
-        // merge multiple mid-run messages into one follow-up turn
-        queued = queued ? queued + "\n" + text : text;
-        process.stdout.write(yellow("(还在工作 —— 你的消息已排队，本轮结束后继续)\n"));
-        return;
-      }
-      busy = true;
-      streaming = false;
-      try {
-        for (let current: string | null = text; current !== null; current = queued, queued = null) {
-          streaming = false;
-          let thinking = false;
-          // markdown-rendered streaming when on a TTY; raw deltas otherwise
-          const md = new TerminalMdStream((s) => process.stdout.write(s));
-          await router.runCliTurn(
-            current,
-            (d) => {
-              if (thinking) {
-                process.stdout.write("\n"); // thinking block ends where the answer begins
-                thinking = false;
-              }
-              if (!streaming) {
-                process.stdout.write(`\n${green("ani> ")}`);
-                streaming = true;
-              }
-              if (useColor) md.push(d);
-              else process.stdout.write(d);
-            },
-            (name, ok, preview) => {
-              process.stdout.write(gray(` ${ok ? "✓" : "✗"} ${preview}`) + "\n");
-            },
-            (name) => {
-              // flush any half-rendered line BEFORE tool status lines, or
-              // buffered text would surface after them (wrong visual order)
-              if (streaming && useColor) md.end();
-              if (streaming || thinking) process.stdout.write("\n");
-              streaming = false;
-              thinking = false;
-              process.stdout.write(gray(` ⚙ ${name}...`));
-            },
-            (d) => {
-              // reasoning streams dimmed, before/around the visible answer
-              if (!thinking) {
-                process.stdout.write(`\n${dim("💭 ")}`);
-                thinking = true;
-              }
-              process.stdout.write(dim(d));
-            },
-          );
-          if (useColor) md.end();
-          process.stdout.write("\n");
-        }
-      } catch (e) {
-        process.stdout.write(`\n${red(`error: ${e instanceof Error ? e.message : e}`)}\n`);
-      } finally {
-        busy = false;
-        streaming = false;
-        queued = null;
-        prompt();
-      }
-    })();
+    pasteBuf = pasteBuf === null ? line : pasteBuf + "\n" + line;
+    if (pasteTimer) clearTimeout(pasteTimer);
+    pasteTimer = setTimeout(() => {
+      pasteTimer = null;
+      const text = (pasteBuf ?? "").trim();
+      pasteBuf = null;
+      void handleInput(text);
+    }, 50);
+    pasteTimer.unref?.();
   });
 
   rl.on("close", () => process.exit(0));
+
+  async function handleInput(text: string): Promise<void> {
+    if (!text) {
+      prompt();
+      return;
+    }
+    if (text.startsWith("/") && !text.includes("\n")) {
+      await command(text);
+      prompt();
+      return;
+    }
+    if (busy) {
+      // merge multiple mid-run messages into one follow-up turn
+      queued = queued ? queued + "\n" + text : text;
+      process.stdout.write(yellow("(还在工作 —— 你的消息已排队，本轮结束后继续)\n"));
+      return;
+    }
+    busy = true;
+    streaming = false;
+    try {
+      for (let current: string | null = text; current !== null; current = queued, queued = null) {
+        streaming = false;
+        let thinking = false;
+        // markdown-rendered streaming when on a TTY; raw deltas otherwise
+        const md = new TerminalMdStream((s) => process.stdout.write(s));
+        await router.runCliTurn(
+          current,
+          (d) => {
+            if (thinking) {
+              process.stdout.write("\n"); // thinking block ends where the answer begins
+              thinking = false;
+            }
+            if (!streaming) {
+              process.stdout.write(`\n${green("ani> ")}`);
+              streaming = true;
+            }
+            if (useColor) md.push(d);
+            else process.stdout.write(d);
+          },
+          (name, ok, preview) => {
+            process.stdout.write(gray(` ${ok ? "✓" : "✗"} ${preview}`) + "\n");
+          },
+          (name) => {
+            // flush any half-rendered line BEFORE tool status lines, or
+            // buffered text would surface after them (wrong visual order)
+            if (streaming && useColor) md.end();
+            if (streaming || thinking) process.stdout.write("\n");
+            streaming = false;
+            thinking = false;
+            process.stdout.write(gray(` ⚙ ${name}...`));
+          },
+          (d) => {
+            // reasoning streams dimmed, before/around the visible answer
+            if (!thinking) {
+              process.stdout.write(`\n${dim("💭 ")}`);
+              thinking = true;
+            }
+            process.stdout.write(dim(d));
+          },
+        );
+        if (useColor) md.end();
+        process.stdout.write("\n");
+      }
+    } catch (e) {
+      process.stdout.write(`\n${red(`error: ${e instanceof Error ? e.message : e}`)}\n`);
+    } finally {
+      busy = false;
+      streaming = false;
+      queued = null;
+      prompt();
+    }
+  }
 
   async function command(text: string): Promise<void> {
     const [cmd, ...rest] = text.slice(1).split(/\s+/);
