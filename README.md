@@ -95,27 +95,54 @@ node ani.ts approve ABC123       # 或另开一个终端（守护进程会热加
 | 联网 | `web_search`（Bing 直连 / DuckDuckGo 走代理）+ `fetch_url`（HTML→文本，直连失败自动走代理） |
 | 浏览器 | `browser` 工具：CDP 驱动**真实 Chrome/Edge**（有头、持久 profile、去自动化标记）——网站看到的是回访真人，基本不触发人机验证 |
 | 文件收发 | 收到文件存 `data/inbox/<chat>/`；`send_file` 工具发到 QQ/TG（图片/文档） |
+| Markdown 渲染 | TG 自动转 HTML 渲染（**粗体**、代码块、链接等），发送失败自动回退纯文本；QQ 需平台 markdown 权限，开 `channels.qq.markdown=true` 后同样生效（失败回退） |
+| 终端体验 | 彩色输出、流式 markdown 渲染、键入 `/` 实时预览命令（Tab 补全） |
 
 ## CLI 命令
 
-```
-/help /reset /approve CODE /chats /model /quit
-```
+键入 `/` 即实时预览可用命令（Tab 补全）。
+
+| 命令 | 作用 |
+|---|---|
+| `/help` | 列出全部命令 |
+| `/new` | 开启全新会话（旧会话归档在 `sessions/*.archive.jsonl`，不丢） |
+| `/status` | 当前会话：消息数、上下文占用、token 用量（真实 API 统计）、压缩次数 |
+| `/chats` | 列出已知会话（QQ/TG/CLI） |
+| `/approve <code>` | 批准配对码 |
+| `/model` | 查看当前模型（改 ani.json 热更新） |
+| `/quit` | 退出 |
 
 ## 常驻后台运行
 
-`node ani.ts` 默认带交互终端；关掉终端它就退出。想让它在后台一直跑（收消息、执行定时任务）：
+一条命令管生命周期（跨平台）：
 
 ```bash
-# Linux / macOS
-nohup node ani.ts --no-cli > data/daemon.log 2>&1 &
-
-# Windows (PowerShell)
-Start-Process node -ArgumentList 'ani.ts','--no-cli' -WindowStyle Hidden `
-  -RedirectStandardOutput data\daemon.log -RedirectStandardError data\daemon.err.log
+ani daemon start     # 后台启动（日志在 data/daemon.out.log）
+ani daemon status    # 是否在跑
+ani daemon restart   # 重启（ani update 之后用这条）
+ani daemon stop      # 停止
 ```
 
-`--no-cli` = 纯守护模式（只跑频道 + 定时任务）。同一配置同时只允许一个实例（`data/ani.lock` 持锁），重复启动会直接退出并提示已在运行的 pid。日常运维：`ani status` 看状态，`ani doctor` 查配置，`ani update` 升级（升完重启 daemon 生效）。
+同一配置同时只允许一个实例（`data/ani.lock` 持锁），重复 start 会提示已在运行的 pid。不配频道时 daemon 会启动即退出并说明原因。
+
+## 查看与修改配置
+
+```bash
+ani config                       # 交互式向导（编号选择、即时保存、密钥脱敏显示）
+ani config show                  # 打印配置（密钥打码）
+ani config set model deepseek-v4-pro   # 单键修改（类型安全：拒绝未知键、自动转型）
+```
+
+所有修改只动 ani.json，未知字段（如 `_note` 注释键）原样保留；daemon 在跑时会提示 restart 生效。
+
+## 升级
+
+```bash
+ani update           # git 安装 → git pull --ff-only；压缩包安装 → 覆盖最新 tarball
+ani daemon restart   # 升级后重启生效
+```
+
+**升级永远不动你的东西**：`ani.json`、`data/`（记忆/会话/定时任务/日志）既不进 git 也不进 tarball，配置加载自动补新字段的默认值。
 
 ## 使用速查
 

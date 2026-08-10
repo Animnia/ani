@@ -269,3 +269,28 @@ test("messaging bridge: sendText/sendFile route through the right channel", { ti
     files.cleanup();
   }
 });
+
+test("session status: usage ledger aggregates provider tokens across calls", { timeout: 30_000 }, async () => {
+  const files = tmpFiles();
+  try {
+    const echo: StreamFn = async ({ messages }) => ({
+      content: "ok: " + messages[messages.length - 1].content.slice(0, 10),
+      toolCalls: [],
+      finishReason: "stop",
+      usage: { prompt_tokens: 100, completion_tokens: 7 },
+    });
+    const { router } = await makeRouter(echo, files);
+    await router.runCliTurn("first", () => {}, () => {});
+    await router.runCliTurn("second", () => {}, () => {});
+    const s = router.sessionStatus("cli:local");
+    assert.equal(s.messages, 4); // 2 user + 2 assistant
+    assert.ok(s.chars > 0 && s.chars < s.maxChars);
+    assert.deepEqual(s.usage, { prompt: 200, completion: 14, calls: 2 });
+    assert.equal(s.compactions, 0);
+    // /new archives + clears; usage ledger intentionally persists (process-scoped)
+    router.resetSession("cli:local");
+    assert.equal(router.sessionStatus("cli:local").messages, 0);
+  } finally {
+    files.cleanup();
+  }
+});

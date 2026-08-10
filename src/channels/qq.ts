@@ -376,14 +376,26 @@ export class QQChannel implements Channel {
 
   async sendText(chatId: string, text: string): Promise<void> {
     const type = this.chatTypes.get(chatId) ?? "c2c";
+    // markdown messages (msg_type 3) require the bot to hold QQ-platform
+    // markdown permission — off by default; enable channels.qq.markdown=true.
+    // Any failure falls back to plain text for that chunk.
+    const useMd = this.cfg.markdown === true;
     for (const chunk of chunkText(text, MAX_MSG)) {
       const msgId = this.lastMsgId.get(chatId);
-      const body: Record<string, unknown> = { content: chunk, msg_type: 0 };
+      const base: Record<string, unknown> = {};
       if (msgId) {
-        body.msg_id = msgId;
-        body.msg_seq = this.nextSeq(chatId);
+        base.msg_id = msgId;
+        base.msg_seq = this.nextSeq(chatId);
       }
-      await this.api("POST", this.messagesPath(chatId, type), body);
+      if (useMd) {
+        try {
+          await this.api("POST", this.messagesPath(chatId, type), { ...base, msg_type: 3, markdown: { content: chunk } });
+          continue;
+        } catch (e) {
+          warn("qq", `markdown send failed, retrying as plain text: ${e instanceof Error ? e.message : e}`);
+        }
+      }
+      await this.api("POST", this.messagesPath(chatId, type), { ...base, content: chunk, msg_type: 0 });
     }
   }
 

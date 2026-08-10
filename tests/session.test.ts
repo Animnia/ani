@@ -3,7 +3,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionStore } from "../src/core/session.ts";
@@ -101,6 +101,47 @@ test("reset clears session", { timeout: 5000 }, () => {
     s.reset("a");
     assert.equal(s.get("a").length, 0);
     assert.equal(new SessionStore(dir).get("a").length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("reset with archive keeps the old transcript as .archive.jsonl", { timeout: 5000 }, () => {
+  const dir = tmp();
+  try {
+    const s = new SessionStore(dir);
+    s.append("cli:local", { role: "user", content: "old stuff", _meta: { ts: 1 } });
+    s.reset("cli:local", { archive: true });
+    assert.equal(s.get("cli:local").length, 0);
+    const files = readdirSync(dir);
+    assert.equal(files.filter((f) => f.endsWith(".archive.jsonl")).length, 1, files.join(","));
+    assert.ok(files.includes("cli_local.jsonl"), files.join(",")); // fresh empty file
+    // plain reset still truncates without archiving
+    s.append("cli:local", { role: "user", content: "new", _meta: { ts: 2 } });
+    s.reset("cli:local");
+    assert.equal(readdirSync(dir).filter((f) => f.endsWith(".archive.jsonl")).length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("size + compactions reflect session state", { timeout: 10_000 }, async () => {
+  const dir = tmp();
+  try {
+    const s = new SessionStore(dir, 500); // tiny budget to force compaction
+    assert.equal(s.size("a"), 0);
+    assert.equal(s.compactions("a"), 0);
+    for (let i = 0; i < 6; i++) {
+      s.append("a", { role: "user", content: "x".repeat(120) + i, _meta: { ts: i } });
+      s.append("a", { role: "assistant", content: "y".repeat(120), _meta: { ts: i } });
+    }
+    assert.ok(s.size("a") > 500);
+    const summarizer: StreamFn = async () => ({ content: "SUMMARY", toolCalls: [], finishReason: "stop" });
+    await s.maybeCompact("a", summarizer, "m");
+    assert.ok(s.size("a") < 1500, `size after compact: ${s.size("a")}`);
+    assert.equal(s.compactions("a"), 1);
+    // survives reload (the marker is persisted in _meta)
+    assert.equal(new SessionStore(dir, 500).compactions("a"), 1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

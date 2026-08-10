@@ -13,6 +13,9 @@ export interface ChannelConfig {
   enabled: boolean;
   useProxy?: boolean;
   owners: string[];
+  /** telegram: render model markdown as HTML (default on, plain-text fallback).
+   *  qq: send msg_type 3 markdown messages (default off — needs QQ-platform permission, plain-text fallback). */
+  markdown?: boolean;
   token?: string; // telegram
   appId?: string; // qq
   clientSecret?: string; // qq

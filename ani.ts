@@ -3,6 +3,8 @@
  *
  *   node ani.ts                 start everything + interactive terminal
  *   node ani.ts --no-cli        daemon mode (channels + cron only)
+ *   node ani.ts daemon <start|stop|restart|status>   background daemon control
+ *   node ani.ts config [show] | config set <key> <v> inspect/edit ani.json safely
  *   node ani.ts approve <CODE>  approve a pairing code (works while daemon runs)
  *   node ani.ts doctor          self-diagnosis (config, network, channels)
  */
@@ -34,6 +36,36 @@ async function main(): Promise<void> {
   if (args[0] === "doctor") {
     const { runDoctor } = await import("./src/doctor.ts");
     process.exit(await runDoctor());
+  }
+
+  // background daemon lifecycle: start / stop / restart / status
+  if (args[0] === "daemon") {
+    const d = await import("./src/daemon.ts");
+    switch (args[1] ?? "status") {
+      case "start":
+        console.log(await d.daemonStart());
+        break;
+      case "stop":
+        console.log(await d.daemonStop());
+        break;
+      case "restart":
+        console.log(await d.daemonRestart());
+        break;
+      case "status":
+        console.log(d.daemonStatus());
+        break;
+      default:
+        console.error("usage: node ani.ts daemon <start|stop|restart|status>");
+        process.exit(1);
+    }
+    return;
+  }
+
+  // safe config inspection/editing (wizard / show / set)
+  if (args[0] === "config") {
+    const { runConfig } = await import("./src/config-cli.ts");
+    await runConfig(args.slice(1));
+    return;
   }
 
   // runtime status: is a daemon up on this config, who is paired, what is

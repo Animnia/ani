@@ -46,6 +46,8 @@ export class Router implements MessagingBridge {
   private tools: ToolDef[] = [];
   private chats = new Map<string, ChatEntry>();
   private chatsFile = joinData("chats.json");
+  /** per-chat token usage ledger (in-memory; provider-reported, exact) */
+  private usageLedger = new Map<string, { prompt: number; completion: number; calls: number }>();
   /** test hook: redirect pairing file writes away from the real ani.json */
   private pairOpts?: { pendingFile?: string; configFile?: string };
 
@@ -128,6 +130,36 @@ export class Router implements MessagingBridge {
     this.cron.stop();
     this.mcp.close();
     for (const ch of this.channels.values()) await ch.stop().catch(() => {});
+  }
+
+  private recordUsage(chatKey: string, u?: { prompt: number; completion: number }): void {
+    if (!u) return;
+    const cur = this.usageLedger.get(chatKey) ?? { prompt: 0, completion: 0, calls: 0 };
+    cur.prompt += u.prompt;
+    cur.completion += u.completion;
+    cur.calls++;
+    this.usageLedger.set(chatKey, cur);
+  }
+
+  /** Snapshot for the CLI /status command. */
+  sessionStatus(chatKey: string): {
+    messages: number;
+    chars: number;
+    maxChars: number;
+    compactions: number;
+    usage: { prompt: number; completion: number; calls: number } | null;
+    model: string;
+    thinking: string;
+  } {
+    return {
+      messages: this.sessions.get(chatKey).length,
+      chars: this.sessions.size(chatKey),
+      maxChars: this.cfg.maxContextChars,
+      compactions: this.sessions.compactions(chatKey),
+      usage: this.usageLedger.get(chatKey) ?? null,
+      model: this.cfg.model,
+      thinking: this.cfg.thinking ?? "enabled",
+    };
   }
 
   model(): string {
@@ -257,6 +289,7 @@ export class Router implements MessagingBridge {
       });
 
       for (const m of wire.slice(before)) this.sessions.append(chatKey, m);
+      this.recordUsage(chatKey, result.usage);
 
       const reply = result.text.trim();
       if (!reply) return;
@@ -313,6 +346,7 @@ export class Router implements MessagingBridge {
         ctx: { chatKey: task.target, channel: targetChannel, chatId: targetChatId, cwd: PATHS.root, signal: controller.signal },
       });
       for (const m of wire.slice(before)) this.sessions.append(chatKey, m);
+      this.recordUsage(chatKey, result.usage);
       const text = result.text.trim() || "(任务完成，无输出)";
       task.lastResult = text.slice(0, 200);
       if (task.target && this.channels.has(targetChannel)) {
@@ -373,11 +407,12 @@ export class Router implements MessagingBridge {
       },
     });
     for (const m of wire.slice(before)) this.sessions.append(chatKey, m);
+    this.recordUsage(chatKey, result.usage);
     return result.text;
   }
 
   resetSession(chatKey: string): void {
-    this.sessions.reset(chatKey);
+    this.sessions.reset(chatKey, { archive: true });
   }
 
   // ------------------------------------------------------------- registry

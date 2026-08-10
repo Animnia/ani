@@ -55,13 +55,33 @@ export class SessionStore {
     }
   }
 
-  reset(chatKey: string): void {
+  reset(chatKey: string, opts?: { archive?: boolean }): void {
+    const f = this.fileFor(chatKey);
+    // /new archives instead of wiping: the transcript is often the only
+    // record of what was decided — keep it as <key>.<ts>.archive.jsonl
+    if (opts?.archive && existsSync(f) && (this.sessions.get(chatKey)?.length ?? 0) > 0) {
+      try {
+        renameSync(f, f.replace(/\.jsonl$/, `.${Date.now()}.archive.jsonl`));
+      } catch {
+        /* fall through to plain truncate */
+      }
+    }
     this.sessions.set(chatKey, []);
     try {
-      writeFileSync(this.fileFor(chatKey), "");
+      writeFileSync(f, "");
     } catch {
       /* ignore */
     }
+  }
+
+  /** Current context size in chars (what compaction budgets against). */
+  size(chatKey: string): number {
+    return this.sizeOf(this.get(chatKey));
+  }
+
+  /** How many compactions this session has survived (persisted via _meta). */
+  compactions(chatKey: string): number {
+    return this.get(chatKey).filter((m) => (m._meta as Record<string, unknown> | undefined)?.compacted).length;
   }
 
   private sizeOf(messages: Msg[]): number {

@@ -27,6 +27,8 @@ export interface AgentRunResult {
   text: string;
   rounds: number;
   aborted: boolean;
+  /** aggregated across all API calls in this run (undefined if the provider didn't report) */
+  usage?: { prompt: number; completion: number };
 }
 
 const MAX_ROUNDS = 40;
@@ -74,9 +76,16 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
 
   let rounds = 0;
   let lastText = "";
+  let usage: AgentRunResult["usage"];
+  const addUsage = (u?: { prompt_tokens?: number; completion_tokens?: number }) => {
+    if (!u) return;
+    usage ??= { prompt: 0, completion: 0 };
+    usage.prompt += u.prompt_tokens ?? 0;
+    usage.completion += u.completion_tokens ?? 0;
+  };
 
   for (;;) {
-    if (signal?.aborted) return { text: lastText, rounds, aborted: true };
+    if (signal?.aborted) return { text: lastText, rounds, aborted: true, usage };
     if (rounds >= maxRounds) {
       messages.push({
         role: "user",
@@ -97,7 +106,8 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
         _meta: { ts: Date.now() },
       };
       messages.push(finalMsg);
-      return { text: finalRes.content, rounds, aborted: false };
+      addUsage(finalRes.usage);
+      return { text: finalRes.content, rounds, aborted: false, usage };
     }
 
     const toSend = opts.beforeCall ? await opts.beforeCall(messages) : messages;
@@ -110,6 +120,7 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
       onReasoningDelta: events?.onReasoningDelta,
     });
     rounds++;
+    addUsage(res.usage);
 
     const assistantMsg: Msg = {
       role: "assistant",
@@ -122,7 +133,7 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
     if (res.content) lastText = res.content;
 
     if (!res.toolCalls.length) {
-      return { text: res.content, rounds, aborted: false };
+      return { text: res.content, rounds, aborted: false, usage };
     }
 
     for (const call of res.toolCalls) {

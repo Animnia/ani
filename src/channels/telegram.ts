@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { download, httpRequest, multipart } from "../core/net.ts";
 import { getConfig, PATHS, type ChannelConfig } from "../core/config.ts";
+import { toTelegramHtml } from "../core/markdown.ts";
 import { error, log, warn } from "../core/log.ts";
 import type { Channel, InboundEvent } from "../core/types.ts";
 import { chunkText } from "./base.ts";
@@ -220,7 +221,23 @@ export class TelegramChannel implements Channel {
   }
 
   async sendText(chatId: string, text: string): Promise<void> {
+    // markdown rendering is on by default (parse_mode HTML); any send that
+    // the API rejects falls back to plain text for that chunk
+    const useMd = this.cfg.markdown !== false;
     for (const chunk of chunkText(text, MAX_MSG)) {
+      if (useMd) {
+        try {
+          await this.api("sendMessage", {
+            chat_id: chatId,
+            text: toTelegramHtml(chunk),
+            parse_mode: "HTML",
+            disable_web_page_preview: true,
+          });
+          continue;
+        } catch (e) {
+          warn("telegram", `markdown send failed, retrying as plain text: ${e instanceof Error ? e.message : e}`);
+        }
+      }
       await this.api("sendMessage", { chat_id: chatId, text: chunk, disable_web_page_preview: true });
     }
   }
