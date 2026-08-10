@@ -3,9 +3,10 @@
  * put name+description into the system prompt. The agent reads the full
  * SKILL.md with its file tools when a task matches. No special machinery.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { debug } from "./log.ts";
+import { PATHS } from "./config.ts";
 
 export interface SkillInfo {
   name: string;
@@ -92,4 +93,60 @@ export function skillsPrompt(skills: SkillInfo[]): string {
     .map((s) => `  <skill>\n    <name>${s.name}</name>\n    <description>${s.description}</description>\n    <location>${s.path}</location>\n  </skill>`)
     .join("\n");
   return `<available_skills>\n${items}\n</available_skills>\nWhen a task matches a skill, read its SKILL.md file first (use the read_file tool with the location path), then follow its instructions.`;
+}
+
+// -------------------------------------------------------- enable/disable
+// State lives in data/skills.json (update-safe): a plain list of disabled
+// skill names. New skills are enabled by default — zero config.
+
+/** The two skill roots: project skills/ + the cross-harness global dir. */
+export function skillDirs(): { project: string; global: string } {
+  const home = process.env.USERPROFILE ?? process.env.HOME ?? "";
+  return { project: PATHS.skillsDir, global: home ? join(home, ".agents", "skills") : "/nonexistent" };
+}
+
+function stateFile(): string {
+  return join(PATHS.data, "skills.json");
+}
+
+export function disabledSkills(): Set<string> {
+  try {
+    const raw = JSON.parse(readFileSync(stateFile(), "utf8")) as { disabled?: string[] };
+    return new Set((raw.disabled ?? []).map((s) => s.toLowerCase()));
+  } catch {
+    return new Set();
+  }
+}
+
+export function enabledSkills(skills: SkillInfo[]): SkillInfo[] {
+  const off = disabledSkills();
+  return skills.filter((s) => !off.has(s.name.toLowerCase()));
+}
+
+export interface SkillStatus extends SkillInfo {
+  enabled: boolean;
+  scope: "project" | "global";
+}
+
+/** All detected skills with status — rescanned on every call (auto-detect). */
+export function listSkills(dirs: { project: string; global: string }): SkillStatus[] {
+  const off = disabledSkills();
+  const tag = (s: SkillInfo[], scope: "project" | "global") =>
+    s.map((x) => ({ ...x, scope, enabled: !off.has(x.name.toLowerCase()) }));
+  const project = tag(loadSkills([dirs.project]), "project");
+  const global = tag(loadSkills([dirs.global]).filter((g) => !project.some((p) => p.name.toLowerCase() === g.name.toLowerCase())), "global");
+  return [...project, ...global];
+}
+
+/** Toggle a skill by name. Returns false when no such skill exists. */
+export function setSkillEnabled(dirs: { project: string; global: string }, name: string, enabled: boolean): boolean {
+  const all = listSkills(dirs);
+  const hit = all.find((s) => s.name.toLowerCase() === name.toLowerCase());
+  if (!hit) return false;
+  const off = disabledSkills();
+  if (enabled) off.delete(hit.name.toLowerCase());
+  else off.add(hit.name.toLowerCase());
+  mkdirSync(PATHS.data, { recursive: true });
+  writeFileSync(stateFile(), JSON.stringify({ disabled: [...off] }, null, 2) + "\n");
+  return true;
 }

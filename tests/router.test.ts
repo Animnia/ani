@@ -339,3 +339,57 @@ test("in-channel slash commands: known commands intercepted, unknown pass to age
     files.cleanup();
   }
 });
+
+test("runCliTurn streams reasoning deltas to the CLI callback", { timeout: 30_000 }, async () => {
+  const files = tmpFiles();
+  try {
+    const thinker: StreamFn = async ({ onReasoningDelta, onTextDelta }) => {
+      onReasoningDelta?.("我在想");
+      onReasoningDelta?.("…");
+      onTextDelta?.("答案");
+      return { content: "答案", reasoning: "我在想…", toolCalls: [], finishReason: "stop" };
+    };
+    const { router } = await makeRouter(thinker, files);
+    try {
+      let reasoning = "";
+      let text = "";
+      await router.runCliTurn("q", (d) => (text += d), () => {}, undefined, (d) => (reasoning += d));
+      assert.equal(reasoning, "我在想…");
+      assert.equal(text, "答案");
+    } finally {
+      await router.shutdown();
+    }
+  } finally {
+    files.cleanup();
+  }
+});
+
+test("in-channel /skills and /show commands", { timeout: 30_000 }, async () => {
+  const files = tmpFiles();
+  try {
+    const echo: StreamFn = async ({ messages }) => ({
+      content: "REPLY: " + messages[messages.length - 1].content,
+      reasoning: "",
+      toolCalls: [],
+      finishReason: "stop",
+    });
+    const { router, channel } = await makeRouter(echo, files);
+    try {
+      channel.owners.push("u1");
+      await (router as any).handleInbound(evt("u1", "/skills"));
+      await waitFor(() => channel.sent.some((m) => m.text.includes("daily-briefing")), "skills list");
+      await (router as any).handleInbound(evt("u1", "/skills off daily-briefing"));
+      await waitFor(() => channel.sent.some((m) => m.text.includes("已禁用")), "disable ack");
+      await (router as any).handleInbound(evt("u1", "/skills on daily-briefing"));
+      await waitFor(() => channel.sent.some((m) => m.text.includes("已启用")), "enable ack");
+      await (router as any).handleInbound(evt("u1", "/show"));
+      await waitFor(() => channel.sent.some((m) => m.text.includes("memory") && m.text.includes("persona")), "show usage");
+      await (router as any).handleInbound(evt("u1", "/show persona"));
+      await waitFor(() => channel.sent.some((m) => m.text.includes("人设 →")), "persona content");
+    } finally {
+      await router.shutdown();
+    }
+  } finally {
+    files.cleanup();
+  }
+});

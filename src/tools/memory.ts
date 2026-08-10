@@ -125,3 +125,39 @@ export const memoryReadTool: ToolDef = {
     return readFileSync(f, "utf8").slice(0, 40_000);
   },
 };
+
+/** The owner's living profile (USER.md). memory_* records FACTS AND EVENTS;
+ *  user_profile records WHO THE OWNER IS — preferences, habits, identity.
+ *  Injected into the system prompt on every turn. */
+export const userProfileTool: ToolDef = {
+  name: "user_profile",
+  description:
+    "Maintain the owner profile (USER.md) — who the owner IS: preferences, habits, identity, workflow. action=append: add a line; action=set: rewrite entirely (reorganize); action=read: show current content. Record durable traits, not conversation logs.",
+  parameters: {
+    type: "object",
+    properties: {
+      action: { type: "string", enum: ["append", "set", "read"] },
+      content: { type: "string", description: "required for append/set" },
+    },
+    required: ["action"],
+  },
+  async execute(args) {
+    const action = String(args.action);
+    const content = String(args.content ?? "").trim();
+    ensureDir();
+    if (action === "read") {
+      if (!existsSync(PATHS.userFile)) return `(empty: ${PATHS.userFile})`;
+      return readFileSync(PATHS.userFile, "utf8").slice(0, 20_000);
+    }
+    if (!content) return "Error: empty content";
+    if (action === "set") {
+      writeFileSync(PATHS.userFile, content + "\n", "utf8");
+      return `USER.md rewritten (${content.length} chars)`;
+    }
+    if (action === "append") {
+      appendFileSync(PATHS.userFile, (existsSync(PATHS.userFile) ? "\n" : "") + content + "\n");
+      return "Appended to USER.md";
+    }
+    return `Error: unknown action "${action}"`;
+  },
+};

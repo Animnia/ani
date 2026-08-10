@@ -70,6 +70,7 @@ export const PATHS = {
   sessions: join(STATE_ROOT, "data", "sessions"),
   memory: join(STATE_ROOT, "data", "memory"),
   memoryFile: join(STATE_ROOT, "data", "memory", "MEMORY.md"),
+  userFile: join(STATE_ROOT, "data", "memory", "USER.md"),
   inbox: join(STATE_ROOT, "data", "inbox"),
   cronFile: join(STATE_ROOT, "data", "cron.json"),
   pendingFile: join(STATE_ROOT, "data", "pending-pairs.json"),

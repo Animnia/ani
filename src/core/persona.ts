@@ -5,7 +5,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { PATHS } from "./config.ts";
-import { loadSkills, skillsPrompt } from "./skills.ts";
+import { enabledSkills, loadSkills, skillsPrompt } from "./skills.ts";
 import { platform, release } from "node:os";
 
 const DEFAULT_PERSONA = "You are Ani, a personal agent. Be concise, capable, and honest. Reply in the user's language.";
@@ -18,7 +18,25 @@ export function buildSystemPrompt(): string {
     /* use default */
   }
 
-  const skills = loadSkills([PATHS.skillsDir, join_homedir_skills()]);
+  const skills = enabledSkills(loadSkills([PATHS.skillsDir, join_homedir_skills()]));
+
+  // USER.md — the living profile of the owner. Grows over time; the agent
+  // maintains it via the user_profile tool. This is what makes ani "know"
+  // its owner better every week.
+  let userBrief = "";
+  try {
+    if (existsSync(PATHS.userFile)) {
+      const u = readFileSync(PATHS.userFile, "utf8").trim();
+      if (u) {
+        userBrief = `\n\n<owner_profile path="${PATHS.userFile}">\n${u.slice(0, 4000)}\n</owner_profile>\nThis is what you know about your owner. Keep it current with the user_profile tool: when they reveal preferences, habits, identity facts, or correct a wrong assumption, update the profile. Record who they ARE, not conversation logs.`;
+      }
+    }
+  } catch {
+    /* no profile yet */
+  }
+  if (!userBrief) {
+    userBrief = `\n\nYou keep a profile of your owner at ${PATHS.userFile} (currently empty). When they reveal preferences/habits/identity facts, record them with the user_profile tool — you should know your owner better over time.`;
+  }
 
   let memoryBrief = "";
   try {
@@ -65,7 +83,7 @@ ${skillsPrompt(skills)}
 - Confirm before destructive/irreversible actions (delete, overwrite, purchases, messaging third parties).
 - When a task needs multiple steps, just do them — don't narrate plans at length.
 - Never invent file paths, URLs, or command output. Verify with tools.
-${memoryBrief}
+${memoryBrief}${userBrief}
 </rules>`;
 }
 

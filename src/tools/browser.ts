@@ -7,7 +7,7 @@
  * that keeps cookies/logins between runs. First login may still need the
  * owner's hand once; after that the site sees a returning human browser.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PATHS } from "../core/config.ts";
@@ -96,36 +96,95 @@ async function ensureBrowser(): Promise<void> {
   const exe = findBrowserExe();
   if (!exe) throw new Error("no Chrome/Edge found on this machine");
   mkdirSync(PATHS.browserProfile, { recursive: true });
-  log("browser", `launching ${exe}`);
-  browserProc = spawn(
-    exe,
-    [
-      "--remote-debugging-port=0", // OS-assigned; read back via DevToolsActivePort
-      `--user-data-dir=${PATHS.browserProfile}`,
-      "--no-first-run",
-      "--no-default-browser-check",
-      "--disable-blink-features=AutomationControlled",
-      "--disable-session-crashed-bubble",
-      "--start-maximized",
-      // headless servers (no X display) need this to run at all;
-      // on desktops we stay headed — real windows look human to anti-bot
-      ...(process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY
-        ? ["--headless=new", "--no-sandbox", "--disable-gpu"]
-        : []),
-    ],
-    { detached: true, stdio: "ignore", windowsHide: process.platform !== "win32" },
-  );
-  browserProc.unref();
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    const p = readDevToolsPort();
-    if (p && (await cdpAlive(p))) {
-      cdpPort = p;
-      return;
+
+  // two attempts: if a leftover ani-Chrome still holds the profile, a fresh
+  // spawn just delegates to it and exits — no new CDP port ever appears.
+  // Detect that, kill the orphans, and retry once on a clean profile.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    log("browser", `launching ${exe} (attempt ${attempt})`);
+    browserProc = spawn(
+      exe,
+      [
+        "--remote-debugging-port=0", // OS-assigned; read back via DevToolsActivePort
+        `--user-data-dir=${PATHS.browserProfile}`,
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-blink-features=AutomationControlled",
+        "--disable-session-crashed-bubble",
+        "--start-maximized",
+        // headless servers (no X display) need this to run at all;
+        // on desktops we stay headed — real windows look human to anti-bot
+        ...(process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY
+          ? ["--headless=new", "--no-sandbox", "--disable-gpu"]
+          : []),
+      ],
+      { detached: true, stdio: "ignore", windowsHide: process.platform !== "win32" },
+    );
+    browserProc.unref();
+    let delegated = false;
+    browserProc.once("exit", () => {
+      delegated = true; // quick exit == singleton handoff to an older instance
+    });
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      const p = readDevToolsPort();
+      if (p && (await cdpAlive(p))) {
+        cdpPort = p;
+        return;
+      }
+      if (delegated) break; // no point waiting the full timeout
+      await new Promise((r) => setTimeout(r, 400));
     }
-    await new Promise((r) => setTimeout(r, 400));
+    if (attempt === 1) {
+      log("browser", "no CDP port — killing orphaned ani-Chrome instances and retrying");
+      killOrphanBrowsers();
+      await new Promise((r) => setTimeout(r, 1500));
+    }
   }
-  throw new Error("browser did not open its CDP port within 15s");
+  throw new Error(
+    "browser did not open its CDP port (tried twice, orphans killed). " +
+      `Close any Chrome window using the profile ${PATHS.browserProfile} and try again.`,
+  );
+}
+
+/** Kill Chrome/Edge processes running with OUR profile dir (never touches
+ *  the user's own browser windows — the match is on the full --user-data-dir). */
+function killOrphanBrowsers(): void {
+  try {
+    let rows: { pid: number; cmd: string }[] = [];
+    if (process.platform === "win32") {
+      const out = execFileSync(
+        "powershell",
+        [
+          "-NoProfile",
+          "-Command",
+          "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe' or Name='msedge.exe'\" | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+        ],
+        { encoding: "utf8", timeout: 15_000 },
+      );
+      const parsed = JSON.parse(out || "[]") as { ProcessId: number; CommandLine?: string } | { ProcessId: number; CommandLine?: string }[];
+      rows = (Array.isArray(parsed) ? parsed : [parsed]).map((p) => ({ pid: p.ProcessId, cmd: p.CommandLine ?? "" }));
+    } else {
+      const out = execFileSync("ps", ["-eo", "pid,args"], { encoding: "utf8", timeout: 10_000 });
+      for (const line of out.split("\n")) {
+        const m = line.trim().match(/^(\d+)\s+(.*)$/);
+        if (m && /chrome|chromium|msedge/i.test(m[2])) rows.push({ pid: Number(m[1]), cmd: m[2] });
+      }
+    }
+    const needle = PATHS.browserProfile.toLowerCase();
+    for (const { pid, cmd } of rows) {
+      if (!cmd.toLowerCase().includes(needle)) continue;
+      if (pid === process.pid) continue;
+      try {
+        process.kill(pid, "SIGKILL");
+        log("browser", `killed orphan browser pid ${pid}`);
+      } catch {
+        /* already gone */
+      }
+    }
+  } catch (e) {
+    log("browser", "orphan sweep failed (continuing):", e);
+  }
 }
 
 interface CdpTarget {

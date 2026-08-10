@@ -89,7 +89,8 @@ node ani.ts approve ABC123       # 或另开一个终端（守护进程会热加
 | 完全掌控本机 | `shell` 工具（cmd/powershell，带超时、输出截断）+ 文件五件套（read/write/edit/list/grep） |
 | 人设 | 项目根目录 `PERSONA.md`，改了下条消息生效 |
 | 长期记忆 | `data/memory/MEMORY.md`（注入系统提示）+ 每日笔记 + memory_write/search/read 工具 |
-| Skills | pi 式渐进披露：`skills/*/SKILL.md` 扫描进提示词，agent 按需读取；兼容 `~/.agents/skills` |
+| 用户资料 | `data/memory/USER.md`：主人是谁、偏好、习惯——agent 用 `user_profile` 工具主动维护，越用越懂你；注入每轮系统提示 |
+| Skills | pi 式渐进披露：`skills/*/SKILL.md` 扫描进提示词，agent 按需读取；兼容 `~/.agents/skills`；`/skills on\|off <名>` 启停 |
 | MCP | `mcpServers` 配置，工具以 `mcp_<server>_<tool>` 挂载；stdio + streamable-HTTP |
 | 定时任务 | `cron_manage` 工具：`@every 30m` / `@daily 09:30` / 5 段 cron；结果推送到任意聊天。时刻按**服务器本地时区**解释 |
 | 联网 | `web_search`（Bing 直连 / DuckDuckGo 走代理）+ `fetch_url`（HTML→文本，直连失败自动走代理） |
@@ -97,7 +98,7 @@ node ani.ts approve ABC123       # 或另开一个终端（守护进程会热加
 | 文件收发 | 收到文件存 `data/inbox/<chat>/`；`send_file` 工具发到 QQ/TG（图片/文档） |
 | Markdown 渲染 | TG 自动转 HTML 渲染（**粗体**、代码块、链接等），发送失败自动回退纯文本；QQ 需平台 markdown 权限，开 `channels.qq.markdown=true` 后同样生效（失败回退） |
 | 掉线提醒 | ani 不在线期间发到 Telegram 的消息，重启后逐聊通知“错过了 N 条，请重发”并跳过旧消息（防止过期指令被延迟执行）；QQ 网关不补发离线消息，属平台限制 |
-| 终端体验 | 彩色输出、流式 markdown 渲染、键入 `/` 实时预览命令（Tab 补全） |
+| 终端体验 | 彩色输出、思考过程（dim）与回答的流式 markdown 渲染、键入 `/` 按 Tab 预览命令 |
 
 ## CLI 命令
 
@@ -111,9 +112,11 @@ node ani.ts approve ABC123       # 或另开一个终端（守护进程会热加
 | `/chats` | 列出已知会话（QQ/TG/CLI） |
 | `/approve <code>` | 批准配对码（仅 CLI） |
 | `/model` | 查看当前模型（改 ani.json 热更新） |
+| `/skills [on\|off <名>]` | 查看 / 启用 / 禁用技能（每次对话自动重扫，新 skill 即刻被发现） |
+| `/show <memory\|user\|persona>` | 查看长期记忆 / 用户资料 / 人设文件的位置与内容 |
 | `/quit` | 退出（仅 CLI） |
 
-**QQ/Telegram 聊天里同样可用** `/new` `/status` `/chats` `/model` `/help`（仅主人）。未匹配的 `/` 开头文本（如 Linux 路径）照常发给 AI。
+**QQ/Telegram 聊天里同样可用** `/new` `/status` `/chats` `/model` `/skills` `/show` `/help`（仅主人）。未匹配的 `/` 开头文本（如 Linux 路径）照常发给 AI。
 
 ## 常驻后台运行
 

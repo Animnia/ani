@@ -21,6 +21,8 @@ const COMMANDS: { name: string; args: string; desc: string }[] = [
   { name: "/chats", args: "", desc: "列出已知会话" },
   { name: "/approve", args: " <code>", desc: "批准一个 QQ/Telegram 配对码" },
   { name: "/model", args: "", desc: "查看当前模型（改 ani.json 即热更新）" },
+  { name: "/skills", args: " [on|off <名>]", desc: "查看 / 启用 / 禁用技能（自动检测）" },
+  { name: "/show", args: " <memory|user|persona>", desc: "查看记忆 / 用户资料 / 人设文件" },
   { name: "/quit", args: "", desc: "退出" },
 ];
 
@@ -72,11 +74,16 @@ export function startCli(router: Router): void {
       try {
         for (let current: string | null = text; current !== null; current = queued, queued = null) {
           streaming = false;
+          let thinking = false;
           // markdown-rendered streaming when on a TTY; raw deltas otherwise
           const md = new TerminalMdStream((s) => process.stdout.write(s));
           await router.runCliTurn(
             current,
             (d) => {
+              if (thinking) {
+                process.stdout.write("\n"); // thinking block ends where the answer begins
+                thinking = false;
+              }
               if (!streaming) {
                 process.stdout.write(`\n${green("ani> ")}`);
                 streaming = true;
@@ -91,9 +98,18 @@ export function startCli(router: Router): void {
               // flush any half-rendered line BEFORE tool status lines, or
               // buffered text would surface after them (wrong visual order)
               if (streaming && useColor) md.end();
-              if (streaming) process.stdout.write("\n");
+              if (streaming || thinking) process.stdout.write("\n");
               streaming = false;
+              thinking = false;
               process.stdout.write(gray(` ⚙ ${name}...`));
+            },
+            (d) => {
+              // reasoning streams dimmed, before/around the visible answer
+              if (!thinking) {
+                process.stdout.write(`\n${dim("💭 ")}`);
+                thinking = true;
+              }
+              process.stdout.write(dim(d));
             },
           );
           if (useColor) md.end();
@@ -149,6 +165,18 @@ export function startCli(router: Router): void {
         break;
       case "model":
         process.stdout.write(router.model() + "\n");
+        break;
+      case "skills": {
+        const parts = rest.length ? rest : [];
+        if (parts.length === 2 && (parts[0] === "on" || parts[0] === "off")) {
+          process.stdout.write(router.skillToggle(parts[1], parts[0] === "on") + "\n");
+        } else {
+          process.stdout.write(router.skillsOverview() + "\n");
+        }
+        break;
+      }
+      case "show":
+        process.stdout.write(router.showFile(rest[0] ?? "") + "\n");
         break;
       case "quit":
       case "exit":

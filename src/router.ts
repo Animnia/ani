@@ -13,6 +13,7 @@ import { createDeepSeekStream } from "./core/deepseek.ts";
 import { runAgent } from "./core/agent.ts";
 import { SessionStore } from "./core/session.ts";
 import { buildSystemPrompt } from "./core/persona.ts";
+import { listSkills, setSkillEnabled, skillDirs, type SkillStatus } from "./core/skills.ts";
 import { Queue } from "./core/net.ts";
 import { log, warn } from "./core/log.ts";
 import type { Channel, InboundEvent, Msg, StreamFn, ToolDef } from "./core/types.ts";
@@ -20,7 +21,7 @@ import { TelegramChannel } from "./channels/telegram.ts";
 import { QQChannel } from "./channels/qq.ts";
 import { shellTool } from "./tools/shell.ts";
 import { editFileTool, grepTool, listDirTool, readFileTool, writeFileTool } from "./tools/files.ts";
-import { memoryReadTool, memorySearchTool, memoryWriteTool } from "./tools/memory.ts";
+import { memoryReadTool, memorySearchTool, memoryWriteTool, userProfileTool } from "./tools/memory.ts";
 import { fetchUrlTool, webSearchTool } from "./tools/web.ts";
 import { browserTool } from "./tools/browser.ts";
 import { CronService, makeCronTool, type CronTask } from "./tools/cron.ts";
@@ -83,7 +84,7 @@ export class Router implements MessagingBridge {
     this.tools = [
       shellTool,
       readFileTool, writeFileTool, editFileTool, listDirTool, grepTool,
-      memoryWriteTool, memorySearchTool, memoryReadTool,
+      memoryWriteTool, memorySearchTool, memoryReadTool, userProfileTool,
       webSearchTool, fetchUrlTool,
       browserTool,
       makeCronTool(this.cron),
@@ -260,6 +261,8 @@ export class Router implements MessagingBridge {
           "/status  会话状态：消息数 / 上下文 / token 用量",
           "/chats   列出已知会话",
           "/model   查看当前模型",
+          "/skills [on|off <名>]  查看 / 启用 / 禁用技能",
+          "/show <memory|user|persona>  查看记忆 / 用户资料 / 人设文件",
           "/help    本帮助",
           "其它内容直接发给 ani 即可。",
         ].join("\n");
@@ -282,9 +285,63 @@ export class Router implements MessagingBridge {
         return this.listChats().map((c) => `${c.chatKey}${c.hint ? `（${c.hint}）` : ""}`).join("\n");
       case "model":
         return `当前模型：${this.cfg.model}（改 ani.json 的 model 字段即热更新）`;
+      case "skills": {
+        const arg = text.split(/\s+/).slice(1);
+        if (arg.length === 2 && (arg[0] === "on" || arg[0] === "off")) return this.skillToggle(arg[1], arg[0] === "on");
+        return this.skillsOverview();
+      }
+      case "show": {
+        const which = text.split(/\s+/)[1] ?? "";
+        return this.showFile(which);
+      }
       default:
         return null; // not a known command — treat as normal text
     }
+  }
+
+  /** /skills — auto-detected skills with on/off state. */
+  skillsOverview(): string {
+    const list = listSkills(skillDirs());
+    if (!list.length) return "没有发现任何 skill（项目 skills/ 与 ~/.agents/skills 都为空）";
+    const lines = list.map(
+      (s: SkillStatus) =>
+        `${s.enabled ? "✓" : "✗"} ${s.name}（${s.scope === "project" ? "项目" : "全局"}）— ${s.description}`,
+    );
+    return ["skills（每次对话自动重扫，新 skill 即刻被发现）:", ...lines, "切换: /skills off <名字> · /skills on <名字>"].join("\n");
+  }
+
+  skillToggle(name: string, enabled: boolean): string {
+    if (!setSkillEnabled(skillDirs(), name, enabled)) return `没有找到名为 "${name}" 的 skill（/skills 查看全部）`;
+    return `${enabled ? "✓ 已启用" : "✗ 已禁用"} skill：${name}（下一条消息生效）`;
+  }
+
+  /** /show — quick peek at the memory / user-profile / persona files. */
+  showFile(which: string): string {
+    const map: Record<string, { label: string; path: string }> = {
+      memory: { label: "长期记忆", path: PATHS.memoryFile },
+      user: { label: "用户资料", path: PATHS.userFile },
+      persona: { label: "人设", path: PATHS.personaFile },
+    };
+    const hit = map[which];
+    if (!hit) {
+      return [
+        "用法: /show <memory|user|persona>",
+        ...Object.entries(map).map(([k, v]) => `  ${k.padEnd(8)} ${v.label} → ${v.path}`),
+      ].join("\n");
+    }
+    let content = "(空)";
+    let size = 0;
+    try {
+      if (existsSync(hit.path)) {
+        content = readFileSync(hit.path, "utf8");
+        size = Buffer.byteLength(content);
+        content = content.trim() || "(空)";
+        if (content.length > 8000) content = content.slice(0, 8000) + "\n…（截断，完整见文件）";
+      }
+    } catch (e) {
+      content = `(读取失败: ${e instanceof Error ? e.message : e})`;
+    }
+    return `${hit.label} → ${hit.path}（${size} 字节）\n\n${content}`;
   }
 
   /** Approve a pairing code. Works in-process (CLI slash command). */
@@ -443,6 +500,7 @@ export class Router implements MessagingBridge {
     onDelta: (d: string) => void,
     onTool: (name: string, ok: boolean, preview: string) => void,
     onToolStart?: (name: string) => void,
+    onReasoning?: (d: string) => void,
   ): Promise<string> {
     const chatKey = "cli:local";
     this.sessions.append(chatKey, { role: "user", content: text, _meta: { ts: Date.now() } });
@@ -457,6 +515,7 @@ export class Router implements MessagingBridge {
       ctx: { chatKey, channel: "cli", chatId: "local", cwd: PATHS.root },
       events: {
         onTextDelta: onDelta,
+        onReasoningDelta: onReasoning,
         onToolStart: onToolStart ?? ((name) => process.stdout.write(`\n\x1b[90m⚙ ${name}...\x1b[0m`)),
         onToolEnd: (name, ok, preview) => onTool(name, ok, preview),
       },
