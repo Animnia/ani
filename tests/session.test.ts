@@ -3,7 +3,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionStore } from "../src/core/session.ts";
@@ -27,6 +27,23 @@ test("append + reload roundtrip", { timeout: 5000 }, () => {
     assert.equal(msgs[0].content, "hello");
     assert.equal(s2.get("qq:ABC").length, 1);
     assert.equal(s2.get("nobody").length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("snapshot restore replaces both cached and persisted transcript", { timeout: 5000 }, () => {
+  const dir = tmp();
+  try {
+    const store = new SessionStore(dir);
+    store.append("fake:boss", { role: "user", content: "committed", _meta: { ts: 1 } });
+    const snapshot = store.snapshot("fake:boss");
+    store.append("fake:boss", { role: "user", content: "cancelled", _meta: { ts: 2 } });
+    store.restore("fake:boss", snapshot);
+
+    assert.deepEqual(store.get("fake:boss").map((m) => m.content), ["committed"]);
+    assert.deepEqual(new SessionStore(dir).get("fake:boss").map((m) => m.content), ["committed"]);
+    assert.ok(!readdirSync(dir).some((f) => f.endsWith(".restore.tmp")));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -93,6 +110,28 @@ test("compaction summarizes and keeps tool chains intact", { timeout: 15_000 }, 
   }
 });
 
+test("compaction preserves the hard-isolation marker for public group history", async () => {
+  const dir = tmp();
+  try {
+    const store = new SessionStore(dir, 300);
+    for (let i = 0; i < 6; i++) {
+      store.append("qq:group", {
+        role: i % 2 ? "assistant" : "user",
+        content: `${i}:${"public ".repeat(20)}`,
+        _meta: { ts: i, groupSafe: true },
+      });
+    }
+    const summarize: StreamFn = async () => ({ content: "PUBLIC SUMMARY", toolCalls: [], finishReason: "stop" });
+
+    await store.maybeCompact("qq:group", summarize, "m");
+
+    assert.equal(store.get("qq:group")[0]._meta?.groupSafe, true);
+    assert.equal(new SessionStore(dir, 300).get("qq:group")[0]._meta?.groupSafe, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("reset clears session", { timeout: 5000 }, () => {
   const dir = tmp();
   try {
@@ -121,6 +160,44 @@ test("reset with archive keeps the old transcript as .archive.jsonl", { timeout:
     s.reset("cli:local");
     assert.equal(readdirSync(dir).filter((f) => f.endsWith(".archive.jsonl")).length, 1);
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("cold reset with archive loads and preserves the on-disk transcript", { timeout: 5000 }, () => {
+  const dir = tmp();
+  try {
+    const writer = new SessionStore(dir);
+    writer.append("cli:local", { role: "user", content: "survive restart", _meta: { ts: 1 } });
+
+    const fresh = new SessionStore(dir);
+    fresh.reset("cli:local", { archive: true });
+
+    assert.equal(fresh.get("cli:local").length, 0);
+    const archives = readdirSync(dir).filter((f) => f.endsWith(".archive.jsonl"));
+    assert.equal(archives.length, 1, readdirSync(dir).join(","));
+    assert.match(readFileSync(join(dir, archives[0]), "utf8"), /survive restart/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("archive failure cancels reset instead of truncating the transcript", { timeout: 5000 }, () => {
+  const dir = tmp();
+  const realNow = Date.now;
+  try {
+    const store = new SessionStore(dir);
+    store.append("cli:local", { role: "user", content: "must not be lost", _meta: { ts: 1 } });
+    Date.now = () => 123456;
+    // A directory at the archive destination deterministically makes the
+    // file rename fail on every supported platform.
+    mkdirSync(join(dir, "cli_local.123456.archive.jsonl"));
+
+    assert.throws(() => store.reset("cli:local", { archive: true }));
+    assert.deepEqual(store.get("cli:local").map((m) => m.content), ["must not be lost"]);
+    assert.match(readFileSync(join(dir, "cli_local.jsonl"), "utf8"), /must not be lost/);
+  } finally {
+    Date.now = realNow;
     rmSync(dir, { recursive: true, force: true });
   }
 });

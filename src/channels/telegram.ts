@@ -22,6 +22,7 @@ interface TgUpdate {
 
 interface TgMessage {
   message_id: number;
+  date?: number;
   from?: { id: number; username?: string; first_name?: string };
   chat: { id: number; type: string; title?: string };
   text?: string;
@@ -236,21 +237,26 @@ export class TelegramChannel implements Channel {
       msg.audio?.file_id ??
       msg.video?.file_id ??
       (msg.photo?.length ? msg.photo[msg.photo.length - 1].file_id : undefined);
-    if (fileId) {
+    const authorized = this.isOwner(userId);
+    if (fileId && authorized) {
       const hint =
         msg.document?.file_name ?? msg.audio?.file_name ?? msg.video?.file_name ??
         (msg.photo ? "photo.jpg" : msg.voice ? "voice.ogg" : "file.bin");
       try {
         files.push(await this.downloadFile(fileId, hint, `telegram:${chatId}`));
-      } catch (e) {
-        warn("telegram", "file download failed:", e);
-        text += `\n[附件下载失败: ${e instanceof Error ? e.message : e}]`;
+      } catch {
+        // download errors can contain Telegram's token-bearing file URL.
+        // Keep both logs and model-visible text fixed and credential-free.
+        warn("telegram", "file download failed (details redacted)");
+        text += "\n[附件下载失败，请重试]";
       }
     }
 
-    if (!text && !files.length) return;
+    // A file-only message from a stranger still reaches Router for pairing,
+    // but no bytes are fetched before the owner gate.
+    if (!text && !files.length && !(fileId && !authorized)) return;
     // typing indicator — best-effort, covers the agent's thinking time
-    this.api("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {});
+    if (authorized) this.api("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {});
     this.onMessage({
       channel: this.name,
       chatId,
@@ -263,11 +269,12 @@ export class TelegramChannel implements Channel {
     });
   }
 
-  async sendText(chatId: string, text: string): Promise<void> {
+  async sendText(chatId: string, text: string, _replyTo?: string, signal?: AbortSignal): Promise<void> {
     // markdown rendering is on by default (parse_mode HTML); any send that
     // the API rejects falls back to plain text for that chunk
     const useMd = this.cfg.markdown !== false;
     for (const chunk of chunkText(text, MAX_MSG)) {
+      if (signal?.aborted) return;
       if (useMd) {
         try {
           await this.api("sendMessage", {
@@ -281,6 +288,7 @@ export class TelegramChannel implements Channel {
           warn("telegram", `markdown send failed, retrying as plain text: ${e instanceof Error ? e.message : e}`);
         }
       }
+      if (signal?.aborted) return;
       await this.api("sendMessage", { chat_id: chatId, text: chunk, disable_web_page_preview: true });
     }
   }

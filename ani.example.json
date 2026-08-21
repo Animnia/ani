@@ -1,6 +1,7 @@
 {
   "$comment": "Copy this file to ani.json and fill in your keys. ani.json is gitignored.",
   "model": "deepseek-v4-flash",
+  "_model_note": "图片识别请改为 deepseek-v4-flash-vision-exp（JPEG/PNG/GIF/WebP）",
   "deepseek": {
     "apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
     "baseUrl": "https://api.deepseek.com"

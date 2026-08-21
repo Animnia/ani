@@ -90,6 +90,58 @@ test("unknown tool gets an error result", { timeout: 5000 }, async () => {
   assert.match(messages.find((m) => m.role === "tool")!.content, /unknown tool/);
 });
 
+test("tool arguments are validated before execution", { timeout: 5000 }, async () => {
+  for (const [argumentsJson, expected] of [
+    ["not-json", /not valid JSON/],
+    ['{"text":42}', /must be string/],
+    ['["ping"]', /must be a JSON object/],
+  ] as const) {
+    let executed = 0;
+    let round = 0;
+    const guarded: ToolDef = { ...echoTool, async execute(args, context) { executed++; return echoTool.execute(args, context); } };
+    const streamFn: StreamFn = async () => {
+      if (round++ === 0) {
+        return {
+          content: "",
+          reasoning: "",
+          toolCalls: [{ id: "v1", type: "function", function: { name: "echo", arguments: argumentsJson } }],
+          finishReason: "tool_calls",
+        };
+      }
+      return { content: "handled", reasoning: "", toolCalls: [], finishReason: "stop" };
+    };
+    const messages: Msg[] = [{ role: "user", content: "go" }];
+    await runAgent({ messages, tools: [guarded], streamFn, model: "m", ctx });
+    assert.equal(executed, 0);
+    assert.match(messages.find((m) => m.role === "tool")!.content, expected);
+  }
+});
+
+test("tool authorization is enforced before execution", { timeout: 5000 }, async () => {
+  let executed = 0;
+  let round = 0;
+  const guarded: ToolDef = { ...echoTool, async execute() { executed++; return "unsafe"; } };
+  const streamFn: StreamFn = async () =>
+    round++ === 0
+      ? {
+          content: "",
+          reasoning: "",
+          toolCalls: [{ id: "p1", type: "function", function: { name: "echo", arguments: '{"text":"ping"}' } }],
+          finishReason: "tool_calls",
+        }
+      : { content: "denied safely", reasoning: "", toolCalls: [], finishReason: "stop" };
+  const messages: Msg[] = [{ role: "user", content: "go" }];
+  await runAgent({
+    messages,
+    tools: [guarded],
+    streamFn,
+    model: "m",
+    ctx: { ...ctx, authorizeTool: () => ({ allowed: false, reason: "blocked by policy" }) },
+  });
+  assert.equal(executed, 0);
+  assert.match(messages.find((m) => m.role === "tool")!.content, /blocked by policy/);
+});
+
 test("abort stops the loop and completes the chain", { timeout: 5000 }, async () => {
   const controller = new AbortController();
   let call = 0;

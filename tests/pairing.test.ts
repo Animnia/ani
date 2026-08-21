@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { approveCode, loadPending, savePending, upsertPending } from "../src/core/pairing.ts";
+import { approveCode, loadPending, PAIR_TTL, savePending, upsertPending } from "../src/core/pairing.ts";
 
 function tmp() {
   const dir = mkdtempSync(join(tmpdir(), "ani-pair-"));
@@ -78,6 +78,56 @@ test("expired pending gets a fresh code", { timeout: 5000 }, () => {
     const p2 = upsertPending({ channel: "qq", userId: "u", chatId: "c" }, t.pendingFile);
     assert.ok(p2.createdAt > aged, "fresh record has a fresh timestamp");
     assert.equal(loadPending(t.pendingFile).length, 1, "expired record replaced, not duplicated");
+  } finally {
+    t[Symbol.dispose]();
+  }
+});
+
+test("approveCode rejects expired codes without mutating config or pending", { timeout: 5000 }, () => {
+  const t = tmp();
+  try {
+    const originalConfig = JSON.stringify({ channels: { telegram: { enabled: true, owners: [] } } });
+    writeFileSync(t.configFile, originalConfig);
+    savePending(
+      [{
+        code: "OLD123",
+        channel: "telegram",
+        userId: "expired-user",
+        chatId: "expired-user",
+        createdAt: Date.now() - PAIR_TTL - 1000,
+        lastNotifiedAt: 0,
+      }],
+      t.pendingFile,
+    );
+
+    assert.equal(approveCode("OLD123", { pendingFile: t.pendingFile, configFile: t.configFile }), null);
+    assert.equal(readFileSync(t.configFile, "utf8"), originalConfig);
+    assert.equal(loadPending(t.pendingFile).length, 1, "rejected code is not consumed");
+  } finally {
+    t[Symbol.dispose]();
+  }
+});
+
+test("approveCode only accepts an explicitly configured channel with owners", { timeout: 5000 }, () => {
+  const t = tmp();
+  try {
+    const originalConfig = JSON.stringify({
+      channels: { telegram: { enabled: true, owners: [] }, broken: { enabled: true } },
+    });
+    writeFileSync(t.configFile, originalConfig);
+    const now = Date.now();
+    savePending(
+      [
+        { code: "NOCHAN", channel: "unknown", userId: "u1", chatId: "c1", createdAt: now, lastNotifiedAt: 0 },
+        { code: "NOOWNR", channel: "broken", userId: "u2", chatId: "c2", createdAt: now, lastNotifiedAt: 0 },
+      ],
+      t.pendingFile,
+    );
+
+    assert.equal(approveCode("NOCHAN", { pendingFile: t.pendingFile, configFile: t.configFile }), null);
+    assert.equal(approveCode("NOOWNR", { pendingFile: t.pendingFile, configFile: t.configFile }), null);
+    assert.equal(readFileSync(t.configFile, "utf8"), originalConfig);
+    assert.equal(loadPending(t.pendingFile).length, 2, "invalid channel records are not consumed");
   } finally {
     t[Symbol.dispose]();
   }

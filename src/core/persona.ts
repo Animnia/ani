@@ -10,7 +10,31 @@ import { platform, release } from "node:os";
 
 const DEFAULT_PERSONA = "You are Ani, a personal agent. Be concise, capable, and honest. Reply in the user's language.";
 
-export function buildSystemPrompt(): string {
+export function buildSystemPrompt(opts: { mode?: "private" | "group" | "cron" } = {}): string {
+  if (opts.mode === "group") {
+    return `${DEFAULT_PERSONA}
+
+<group_chat>
+This is a public group conversation. You have deliberately not been given the owner's persona file, profile, memory, local paths, browser session, messaging tools, or machine-control tools.
+You may answer from the visible conversation, inspect images explicitly posted in this group, and use public web search when available.
+Never claim to have accessed private state. If a request requires private data or machine access, ask the owner to continue in a direct message.
+Keep replies concise and suitable for everyone in the group.
+</group_chat>
+
+Current time: ${new Date().toString()}`;
+  }
+  if (opts.mode === "cron") {
+    return `${DEFAULT_PERSONA}
+
+<public_automation>
+This is an unattended scheduled task whose result may be delivered to a public chat. You have deliberately not been given the owner's persona, profile, memory, local files, machine controls, browser session, or arbitrary messaging access.
+Use only the task text and explicitly available public tools. The messaging tool, when present, can address only this task's configured delivery target.
+Never claim to have accessed private state. Keep the report concise and safe for public delivery.
+</public_automation>
+
+Current time: ${new Date().toString()}`;
+  }
+
   let persona = DEFAULT_PERSONA;
   try {
     if (existsSync(PATHS.personaFile)) persona = readFileSync(PATHS.personaFile, "utf8").trim();
@@ -53,11 +77,13 @@ export function buildSystemPrompt(): string {
     memoryBrief = `\n\nYou have long-term memory at ${PATHS.memoryFile} (currently empty). Use the memory_write tool to record durable facts; use memory_search to recall older notes.`;
   }
 
+  const os = platform();
+  const shell = os === "win32" ? "Windows cmd/PowerShell" : "POSIX sh";
   const env = [
     `Current time: ${new Date().toString()}`,
-    `OS: ${platform()} ${release()} (Windows)`,
+    `OS: ${os} ${release()}`,
     `Project dir (your home): ${PATHS.root}`,
-    `Shell: Windows — use the shell tool with cmd or powershell syntax.`,
+    `Shell: ${shell}.`,
   ].join("\n");
 
   return `${persona}
@@ -75,12 +101,13 @@ You run autonomously on the owner's machine with full control of it. You can:
 - remember things long-term (memory tools), schedule recurring/one-shot tasks (cron tool)
 - message the owner on any connected channel and send files (messaging tools)
 - use MCP server tools (mcp_* tools) if any are configured
+- understand images attached by the owner when the configured model supports vision
 ${skillsPrompt(skills)}
 </capabilities>
 
 <rules>
 - Be terse in chat replies. Long content → save to a file and send the file.
-- Confirm before destructive/irreversible actions (delete, overwrite, purchases, messaging third parties).
+- Destructive, persistent, machine-control, external-network, and third-party actions are protected by a code-level approval gate. If a tool result asks for /confirm TOKEN, do not explain or reinterpret its risk: the program will show a canonical argument preview and full digest. Ask the owner to inspect that code-generated notice and send the command; never work around the gate or change arguments after approval.
 - When a task needs multiple steps, just do them — don't narrate plans at length.
 - Never invent file paths, URLs, or command output. Verify with tools.
 ${memoryBrief}${userBrief}

@@ -57,7 +57,7 @@ node ani.ts --no-cli   # 纯守护进程模式
 
 ```jsonc
 {
-  "model": "deepseek-v4-flash",       // 或 deepseek-v4-pro
+  "model": "deepseek-v4-flash",       // 或 deepseek-v4-pro / deepseek-v4-flash-vision-exp
   "deepseek": { "apiKey": "sk-...", "baseUrl": "https://api.deepseek.com" },
   "thinking": "enabled",              // "disabled" 更快更便宜
   "proxy": "http://127.0.0.1:6850",   // 仅用于 useProxy:true 的服务
@@ -82,6 +82,24 @@ ani 能完全控制你的电脑，所以**只有 owners 名单里的人能跟它
 node ani.ts approve ABC123       # 或另开一个终端（守护进程会热加载配置）
 ```
 
+高权限工具还有第二道代码级门禁。shell、文件写入、记忆/资料修改、定时任务变更、外部网络访问、浏览器交互、MCP 与跨聊天发送等操作不会只凭提示词执行：ani 会用代码直接展示规范化工具参数和校验摘要；主人发送 `/confirm <code>` 后，只有**当前执行代际里、完全相同的工具名和参数**可执行一次。确认码 10 分钟过期；任何新消息、命令或 `/new` 都会撤销旧码和授权。
+
+Cron 无法代替主人实时确认，因此统一运行在公共自动化沙箱：不加载 PERSONA、USER、MEMORY、Skills 或本机能力，只允许公开 `web_search`，以及向任务既定目标发送结果。这也使旧任务即使指向群聊也不会旁路群聊隔离。
+
+群聊是硬隔离模式：不加载私人 PERSONA、USER、MEMORY、Skills、机器路径或登录浏览器，只提供公开网页搜索和当前群里显式发送的图片；`/show`、`/chats`、`/skills`、`/confirm` 在群聊不可用。旧版本产生的群聊历史会在首次新消息时归档，避免把旧的私人上下文带进新隔离区。
+
+## 图片识别（DeepSeek Vision）
+
+把模型改为实验视觉模型后，QQ/Telegram 收到的图片会直接作为多模态输入交给 DeepSeek，而不再只是把本地文件路径告诉模型：
+
+```jsonc
+{
+  "model": "deepseek-v4-flash-vision-exp"
+}
+```
+
+支持 JPEG、PNG、GIF、WebP；ani 按文件真实魔数识别，不信任扩展名。图片路径保存在会话 JSONL 中，base64 只在发请求时临时生成，不会塞进会话文件。单张 inline 图片上限 32 MiB、完整请求体上限 48 MiB、每次最多 600 张，与 [DeepSeek Vision 官方文档](https://api-docs.deepseek.com/guides/vision/)一致。请求会优先保留最新图片；旧图片被清理、损坏或超出预算时只在本次请求中降级为文本提示，不会卡死会话。模型热切回非视觉版本时会忽略图片块并继续文本会话，之后切回 Vision 仍可复用尚在的图片文件。
+
 ## 功能一览
 
 | 能力 | 实现 |
@@ -92,10 +110,11 @@ node ani.ts approve ABC123       # 或另开一个终端（守护进程会热加
 | 用户资料 | `data/memory/USER.md`：主人是谁、偏好、习惯——agent 用 `user_profile` 工具主动维护，越用越懂你；注入每轮系统提示 |
 | Skills | pi 式渐进披露：`skills/*/SKILL.md` 扫描进提示词，agent 按需读取；兼容 `~/.agents/skills`；`/skills on\|off <名>` 启停 |
 | MCP | `mcpServers` 配置，工具以 `mcp_<server>_<tool>` 挂载；stdio + streamable-HTTP |
-| 定时任务 | `cron_manage` 工具：`@every 30m` / `@daily 09:30` / 5 段 cron；结果推送到任意聊天。时刻按**服务器本地时区**解释 |
+| 定时任务 | `cron_manage` 工具：`@every 30m` / `@daily 09:30` / 5 段 cron；执行时使用公共 prompt + 公开搜索并推送到既定目标。时刻按**服务器本地时区**解释 |
 | 联网 | `web_search`（Tavily API，需 `tavily.apiKey` 或环境变量 `TAVILY_API_KEY`，免费额度 tavily.com 申请）+ `fetch_url`（HTML→文本，直连失败自动走代理） |
 | 浏览器 | `browser` 工具：CDP 驱动**真实 Chrome/Edge**（有头、持久 profile、去自动化标记）——网站看到的是回访真人，基本不触发人机验证 |
 | 文件收发 | 收到文件存 `data/inbox/<chat>/`；`send_file` 工具发到 QQ/TG（图片/文档） |
+| 图片理解 | `deepseek-v4-flash-vision-exp` 下自动把 QQ/TG 图片编码为标准 `text + image_url` 多模态消息 |
 | Markdown 渲染 | TG 自动转 HTML 渲染（**粗体**、代码块、链接等），发送失败自动回退纯文本；QQ 需平台 markdown 权限，开 `channels.qq.markdown=true` 后同样生效（失败回退） |
 | 掉线提醒 | ani 不在线期间发到 Telegram 的消息，重启后逐聊通知“错过了 N 条，请重发”并跳过旧消息（防止过期指令被延迟执行）；QQ 网关不补发离线消息，属平台限制 |
 | 终端体验 | 彩色输出、思考过程（dim）与回答的流式 markdown 渲染、键入 `/` 按 Tab 预览命令 |
@@ -111,12 +130,13 @@ node ani.ts approve ABC123       # 或另开一个终端（守护进程会热加
 | `/status` | 当前会话：消息数、上下文占用、token 用量（真实 API 统计）、压缩次数 |
 | `/chats` | 列出已知会话（QQ/TG/CLI） |
 | `/approve <code>` | 批准配对码（仅 CLI） |
+| `/confirm <code>` | 批准一次参数完全相同的高权限工具调用 |
 | `/model` | 查看当前模型（改 ani.json 热更新） |
 | `/skills [on\|off <名>]` | 查看 / 启用 / 禁用技能（每次对话自动重扫，新 skill 即刻被发现） |
 | `/show <memory\|user\|persona>` | 查看长期记忆 / 用户资料 / 人设文件的位置与内容 |
 | `/quit` | 退出（仅 CLI） |
 
-**QQ/Telegram 聊天里同样可用** `/new` `/status` `/chats` `/model` `/skills` `/show` `/help`（仅主人）。未匹配的 `/` 开头文本（如 Linux 路径）照常发给 AI。
+**QQ/Telegram 私聊里同样可用** `/new` `/status` `/chats` `/model` `/skills` `/show` `/confirm` `/help`（仅主人）。群聊只开放 `/new` `/status` `/model` `/help`；未匹配的 `/` 开头文本（如 Linux 路径）照常发给 AI。
 
 ## 常驻后台运行
 
@@ -129,7 +149,7 @@ ani daemon restart   # 重启（ani update 之后用这条）
 ani daemon stop      # 停止
 ```
 
-同一配置同时只允许一个实例（`data/ani.lock` 持锁），重复 start 会提示已在运行的 pid。不配频道时 daemon 会启动即退出并说明原因。
+同一配置同时只允许一个实例（`data/ani.lock` 持锁），重复 start 会提示已在运行的 pid。不配频道时 daemon 仍会常驻，以便运行 Cron 和保存状态。
 
 ## 查看与修改配置
 
@@ -155,17 +175,17 @@ ani daemon restart   # 升级后重启生效
 真实会话一瞥（CLI；QQ/TG 里只有最终回复）：
 
 ```
-you> 现在几点？顺便记住我喜欢深夜写代码
- ✓ shell(echo %date% %time%) → 2026/08/10 周一 6:38
+you> 记住我喜欢深夜写代码
+ani> 这会修改长期记忆，请发送 /confirm 4A7D91EF。
+you> /confirm 4A7D91EF
  ✓ memory_write → Appended to MEMORY.md
-ani> 现在是 2026年8月10日（周一）早上 6:38。
-     嗯？六点半还没睡？看来这就是你说的"深夜写代码"了😂 已记下。
+ani> 已记下：你喜欢深夜写代码。
 ```
 
 跟 ani 说话即可，例如：
 
 ```
-定时任务：「每天早上 8 点给我发早报」        → 它会用 cron_manage 建任务并触发 daily-briefing skill
+定时任务：「每天早上 8 点给我发北京天气早报」  → 建立只使用公开搜索的安全 Cron
 记忆：    「记住我咖啡豆快喝完了，周五提醒我买」 → memory_write + cron
 文件：    「把 C:/reports 下最新的 pdf 发给我」  → shell + send_file
 浏览器：  「打开某网站帮我看看 XXX」           → browser 工具（真实 Chrome，登录态持久）
@@ -191,9 +211,10 @@ tests/              node:test 全套测试（严格超时）
 ```bash
 npm test                    # 全部（含真实网络集成测试 + e2e）
 node --test "tests/net.test.ts"      # 单跑某个
+DEEPSEEK_API_KEY=sk-... node --test --test-name-pattern="DeepSeek Vision" tests/integration.test.ts
 ```
 
-集成测试需要网络 + 有效的 `ani.json`（DeepSeek key、Telegram 代理、QQ 网关）。QQ/TG 的**消息收发**测试需要你真人给 bot 发条消息——没有真人协助这部分无法自动化，属预期。
+DeepSeek 集成测试可从一次性环境变量读取 Key，不必写入配置；也可使用有效的 `ani.json`。Telegram/QQ 集成仍需要对应配置和网络。QQ/TG 的**消息收发**测试需要你真人给 bot 发条消息——没有真人协助这部分无法自动化，属预期。
 
 ## 排障速查
 
@@ -206,13 +227,14 @@ node --test "tests/net.test.ts"      # 单跑某个
 | QQ 每 ~30 分钟一次 `closed (code 4009)` 后秒级恢复 | **正常现象**：沙箱 token 30 分钟过期，QQ 踢掉旧会话，ani 自动刷新重连 |
 | QQ 更频繁地掉线重连 | 另一设备用同一凭据登录了（会话互抢）。同一 bot 同时只能一个 ani |
 | Telegram 一直 poll error | 代理不通：`ani doctor` 的 proxy 项会报。配 `proxy` 为 `http://127.0.0.1:<端口>` |
+| QQ/TG 图片已保存但模型说看不到 | `model` 必须是 `deepseek-v4-flash-vision-exp`；图片需为 JPEG/PNG/GIF/WebP 且单张不超过 32 MiB |
 | DeepSeek 400 tool 相关 | 理论上不会发生（会话压缩保证工具链完整，有 fuzz 守护）；真遇到请提 issue 附 `data/ani.log` |
 | 想从零重来 | 停 daemon → 删 `data/`（记忆在 `data/memory/`，要留就备份）→ 重启 |
 
 ## 已知取舍
 
-- **纯文本**：DeepSeek 无图片输入；收到的图片存本地，agent 可用本地工具处理。
+- **Vision 为实验模型**：只有 `deepseek-v4-flash-vision-exp` 接受图片；其他模型仍按普通本地附件处理。
 - **QQ 主动消息**受平台限制（需要近期 msg_id），cron 推送到 QQ 前请先跟 bot 说句话。
 - Telegram 在国内必须代理（`useProxy: true` 已默认）；QQ/DeepSeek 直连。
 - **多设备**：可以在多台设备上各装一份 ani，但**同一个 bot token 不要两端同时运行**（Telegram 长轮询会互踢 409，QQ 网关会互抢会话）。建议：一台主力机常开，其他设备用时再启动；或给不同设备配不同的 bot。
-- **群聊**：群里 @ani 的回复所有成员可见。ani 有群聊隐私守卫（不在群里泄露记忆/文件/个人数据），敏感事请私聊。
+- **群聊**：群里 @ani 的回复所有成员可见。群聊采用独立公共 prompt 与工具 allowlist，不加载私人记忆、资料、文件能力或登录态；敏感事请私聊。

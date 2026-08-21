@@ -73,13 +73,20 @@ export function approveCode(
   const idx = pending.findIndex((x) => x.code.toUpperCase() === code.toUpperCase());
   if (idx === -1) return null;
   const p = pending[idx];
-  pending.splice(idx, 1);
-  savePending(pending, pendingFile);
+  const now = Date.now();
+  if (!Number.isFinite(p.createdAt) || p.createdAt > now || now - p.createdAt > PAIR_TTL) return null;
+
   const cfg = opts.configFile ? JSON.parse(readFileSync(configFile, "utf8")) : loadConfig();
-  const chCfg = p.channel === "telegram" ? cfg.channels?.telegram : cfg.channels?.qq;
-  if (!chCfg) return null;
-  if (!Array.isArray(chCfg.owners)) chCfg.owners = [];
+  const channels = cfg.channels as unknown as Record<string, { owners?: unknown }> | undefined;
+  if (!channels || !Object.hasOwn(channels, p.channel)) return null;
+  const chCfg = channels[p.channel];
+  if (!chCfg || !Array.isArray(chCfg.owners)) return null;
+
   if (!chCfg.owners.includes(p.userId)) chCfg.owners.push(p.userId);
   writeFileSync(configFile, JSON.stringify(cfg, null, 2));
+  // Consume the code only after every validation passed and the owner update
+  // reached disk. A malformed/expired record must not destroy a usable code.
+  pending.splice(idx, 1);
+  savePending(pending, pendingFile);
   return p;
 }

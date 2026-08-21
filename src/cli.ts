@@ -20,6 +20,7 @@ const COMMANDS: { name: string; args: string; desc: string }[] = [
   { name: "/status", args: "", desc: "当前会话：消息数 / 上下文占用 / token 用量" },
   { name: "/chats", args: "", desc: "列出已知会话" },
   { name: "/approve", args: " <code>", desc: "批准一个 QQ/Telegram 配对码" },
+  { name: "/confirm", args: " <code>", desc: "批准一次完全相同的高权限工具调用" },
   { name: "/model", args: "", desc: "查看当前模型（改 ani.json 即热更新）" },
   { name: "/skills", args: " [on|off <名>]", desc: "查看 / 启用 / 禁用技能（自动检测）" },
   { name: "/show", args: " <memory|user|persona>", desc: "查看记忆 / 用户资料 / 人设文件" },
@@ -100,7 +101,9 @@ export function startCli(router: Router): void {
       prompt();
       return;
     }
-    if (text.startsWith("/") && !text.includes("\n")) {
+    // /confirm is a real actor turn: it must retry the frozen tool call in
+    // the same generation so a later "cancel" or /new can revoke it.
+    if (text.startsWith("/") && !text.includes("\n") && !/^\/confirm\b/i.test(text)) {
       await command(text);
       prompt();
       return;
@@ -170,6 +173,7 @@ export function startCli(router: Router): void {
   async function command(text: string): Promise<void> {
     const [cmd, ...rest] = text.slice(1).split(/\s+/);
     const arg = rest.join(" ");
+    router.cancelToolApprovals("cli:local");
     switch (cmd) {
       case "help":
         process.stdout.write(
@@ -178,7 +182,7 @@ export function startCli(router: Router): void {
         break;
       case "new":
       case "reset": // kept as an alias — muscle memory from older versions
-        router.resetSession("cli:local");
+        await router.resetSession("cli:local");
         process.stdout.write("新会话已开始（旧会话已归档到 sessions/ 下，随时可查）。\n");
         break;
       case "status": {

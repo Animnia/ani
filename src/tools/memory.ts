@@ -120,6 +120,9 @@ export const memoryReadTool: ToolDef = {
         return "(no notes)";
       }
     }
+    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return "Error: date must be YYYY-MM-DD or 'list'";
+    }
     const f = date ? join(PATHS.memory, "notes", date + ".md") : PATHS.memoryFile;
     if (!existsSync(f)) return `(empty: ${f})`;
     return readFileSync(f, "utf8").slice(0, 40_000);

@@ -8,7 +8,7 @@
  * direct messages (1<<12).
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { download, httpRequest } from "../core/net.ts";
 import { PATHS, type ChannelConfig } from "../core/config.ts";
 import { error, log, warn } from "../core/log.ts";
@@ -47,11 +47,13 @@ export class QQChannel implements Channel {
   private endpoints: { tokenUrl: string; apiBase: string };
   /** state file for durable chatType knowledge; tests redirect it */
   private typesFile = QQ_TYPES_FILE;
+  /** attachment root; tests redirect it */
+  private inboxDir = PATHS.inbox;
 
   constructor(
     cfg: ChannelConfig,
     onMessage: (evt: InboundEvent) => void,
-    endpoints?: { tokenUrl?: string; apiBase?: string; typesFile?: string },
+    endpoints?: { tokenUrl?: string; apiBase?: string; typesFile?: string; inboxDir?: string },
   ) {
     this.cfg = cfg;
     this.onMessage = onMessage;
@@ -60,6 +62,7 @@ export class QQChannel implements Channel {
       apiBase: endpoints?.apiBase ?? API_BASE,
     };
     if (endpoints?.typesFile) this.typesFile = endpoints.typesFile;
+    if (endpoints?.inboxDir) this.inboxDir = endpoints.inboxDir;
     // chatTypes are durable knowledge (which openid is a group vs a user) —
     // persist them so cron pushes after a restart hit the right endpoint.
     try {
@@ -290,6 +293,15 @@ export class QQChannel implements Channel {
 
   // ------------------------------------------------------------- inbound
 
+  private attachmentTarget(chatId: string, rawName: string): { dir: string; path: string; name: string } {
+    const leafName = basename(rawName.replace(/\\/g, "/")).replace(/\0/g, "_");
+    const name = !leafName || leafName === "." || leafName === ".." ? "file.bin" : leafName;
+    const dir = resolve(this.inboxDir, `qq_${chatId.replace(/[^A-Za-z0-9_.-]/g, "_")}`);
+    const path = resolve(dir, `${Date.now()}-${name}`);
+    if (!path.startsWith(dir + sep)) throw new Error("unsafe attachment filename");
+    return { dir, path, name };
+  }
+
   private async handleInbound(t: string, d: any): Promise<void> {
     const msgId = String(d?.id ?? "");
     if (!msgId || this.dedup.has(msgId)) return;
@@ -329,26 +341,32 @@ export class QQChannel implements Channel {
 
     const files: { path: string; name: string; size: number }[] = [];
     const atts = Array.isArray(d.attachments) ? d.attachments : [];
-    for (const att of atts) {
-      let url = String(att?.url ?? "");
-      if (!url) continue;
-      if (url.startsWith("//")) url = "https:" + url;
-      if (url.startsWith("http://")) url = "https://" + url.slice(7);
-      const name = String(att.filename ?? basename(new URL(url).pathname) ?? "file.bin");
-      try {
-        const buf = await download(url, { timeoutMs: 120_000 });
-        const dir = join(PATHS.inbox, `qq_${chatId.replace(/[^A-Za-z0-9_.-]/g, "_")}`);
-        mkdirSync(dir, { recursive: true });
-        const p = join(dir, `${Date.now()}-${name}`);
-        writeFileSync(p, buf);
-        files.push({ path: p, name, size: buf.length });
-      } catch (e) {
-        warn("qq", `attachment download failed: ${e instanceof Error ? e.message : e}`);
-        text += `\n[附件 ${name} 下载失败]`;
+    // Router owns the canonical authorization decision, but channels must
+    // also gate expensive downloads because Router only sees local paths.
+    if (this.isOwner(userId)) {
+      for (const att of atts) {
+        let url = String(att?.url ?? "");
+        if (!url) continue;
+        if (url.startsWith("//")) url = "https:" + url;
+        if (url.startsWith("http://")) url = "https://" + url.slice(7);
+        try {
+          const rawName = String(att.filename ?? basename(new URL(url).pathname) ?? "file.bin");
+          const target = this.attachmentTarget(chatId, rawName);
+          const { name } = target;
+          const buf = await download(url, { timeoutMs: 120_000 });
+          mkdirSync(target.dir, { recursive: true });
+          writeFileSync(target.path, buf);
+          files.push({ path: target.path, name, size: buf.length });
+        } catch (e) {
+          warn("qq", `attachment download failed: ${e instanceof Error ? e.message : e}`);
+          text += `\n[附件下载失败]`;
+        }
       }
     }
 
-    if (!text && !files.length) return;
+    // Preserve file-only unauthorized events so Router can offer DM pairing,
+    // while ensuring the attachment itself was never downloaded.
+    if (!text && !files.length && !(atts.length && !this.isOwner(userId))) return;
     this.onMessage({
       channel: this.name,
       chatId,
@@ -374,13 +392,14 @@ export class QQChannel implements Channel {
     return `/v2/users/${chatId}/messages`;
   }
 
-  async sendText(chatId: string, text: string): Promise<void> {
+  async sendText(chatId: string, text: string, _replyTo?: string, signal?: AbortSignal): Promise<void> {
     const type = this.chatTypes.get(chatId) ?? "c2c";
     // markdown messages (msg_type 3) require the bot to hold QQ-platform
     // markdown permission — off by default; enable channels.qq.markdown=true.
     // Any failure falls back to plain text for that chunk.
     const useMd = this.cfg.markdown === true;
     for (const chunk of chunkText(text, MAX_MSG)) {
+      if (signal?.aborted) return;
       const msgId = this.lastMsgId.get(chatId);
       const base: Record<string, unknown> = {};
       if (msgId) {
@@ -395,6 +414,7 @@ export class QQChannel implements Channel {
           warn("qq", `markdown send failed, retrying as plain text: ${e instanceof Error ? e.message : e}`);
         }
       }
+      if (signal?.aborted) return;
       await this.api("POST", this.messagesPath(chatId, type), { ...base, content: chunk, msg_type: 0 });
     }
   }

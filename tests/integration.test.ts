@@ -6,23 +6,27 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createDeepSeekStream } from "../src/core/deepseek.ts";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createDeepSeekStream, DEEPSEEK_VISION_MODEL } from "../src/core/deepseek.ts";
 import { loadConfig } from "../src/core/config.ts";
 import { httpRequest } from "../src/core/net.ts";
 import { webSearchTool, fetchUrlTool } from "../src/tools/web.ts";
 import { hasLiveCredentials, needs } from "./helpers.ts";
 
 const cfg = loadConfig();
+const deepseekApiKey = process.env.DEEPSEEK_API_KEY?.trim() || cfg.deepseek.apiKey;
 const ctx = { chatKey: "t:t", channel: "t", chatId: "t", cwd: process.cwd() };
 const live = hasLiveCredentials();
-const SKIP = needs(live, "valid deepseek.apiKey in ani.json");
+const SKIP = needs(live, "DEEPSEEK_API_KEY or valid deepseek.apiKey in ani.json");
 const tg = cfg.channels.telegram;
 const qq = cfg.channels.qq;
 const SKIP_TG = needs(Boolean(tg?.enabled && tg.token), "telegram channel configured");
 const SKIP_QQ = needs(Boolean(qq?.enabled && qq.appId), "qq channel configured");
 
 test("DeepSeek: streaming chat", { timeout: 60_000, ...SKIP }, async () => {
-  const stream = createDeepSeekStream({ apiKey: cfg.deepseek.apiKey, baseUrl: cfg.deepseek.baseUrl });
+  const stream = createDeepSeekStream({ apiKey: deepseekApiKey, baseUrl: cfg.deepseek.baseUrl });
   let streamed = "";
   const res = await stream({
     model: cfg.model,
@@ -37,7 +41,7 @@ test("DeepSeek: streaming chat", { timeout: 60_000, ...SKIP }, async () => {
 });
 
 test("DeepSeek: tool call + reasoning round-trip (the 400 trap)", { timeout: 90_000, ...SKIP }, async () => {
-  const stream = createDeepSeekStream({ apiKey: cfg.deepseek.apiKey, baseUrl: cfg.deepseek.baseUrl });
+  const stream = createDeepSeekStream({ apiKey: deepseekApiKey, baseUrl: cfg.deepseek.baseUrl });
   const tools = [
     {
       type: "function" as const,
@@ -75,6 +79,33 @@ test("DeepSeek: tool call + reasoning round-trip (the 400 trap)", { timeout: 90_
     maxTokens: 4096,
   });
   assert.ok(r2.content.length > 0, "model answered after tool result");
+});
+
+test("DeepSeek Vision: live inline local image", { timeout: 90_000, ...SKIP }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ani-live-vision-"));
+  const imagePath = join(dir, "black.png");
+  // Valid opaque black 1x1 PNG. DeepSeek scales tiny images before inference.
+  writeFileSync(
+    imagePath,
+    Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"),
+  );
+  try {
+    const stream = createDeepSeekStream({ apiKey: deepseekApiKey, baseUrl: cfg.deepseek.baseUrl });
+    const result = await stream({
+      model: DEEPSEEK_VISION_MODEL,
+      messages: [{
+        role: "user",
+        content: "这张纯色图片是黑色还是白色？只回答 BLACK 或 WHITE。",
+        images: [{ path: imagePath, detail: "auto" }],
+      }],
+      tools: [],
+      maxTokens: 128,
+    });
+    assert.match(result.content.trim(), /BLACK/i, result.content);
+    assert.ok(result.usage && result.usage.prompt_tokens! > 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("Telegram: getMe via proxy", { timeout: 30_000, ...SKIP_TG }, async () => {

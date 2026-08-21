@@ -1,6 +1,6 @@
 /**
- * Core types for ani. Messages mirror the DeepSeek/OpenAI wire format exactly
- * (plus internal `_meta`) so the provider stays a thin serializer.
+ * Core types for ani. Text messages mirror the DeepSeek/OpenAI wire format;
+ * local image paths and `_meta` stay internal until the provider serializes.
  */
 
 export interface ToolCall {
@@ -9,9 +9,19 @@ export interface ToolCall {
   function: { name: string; arguments: string };
 }
 
+export type ImageDetail = "low" | "high" | "original" | "auto";
+
+/** Image input kept outside `content` so session JSONL stores paths, not base64. */
+export type ImageInput =
+  | { path: string; detail?: ImageDetail }
+  | { url: string; detail?: ImageDetail }
+  | { fileId: string };
+
 export interface Msg {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  /** Vision input. Only valid on user messages; encoded by the provider. */
+  images?: ImageInput[];
   /** DeepSeek thinking content. MUST be preserved for assistant messages
    *  that carry tool_calls, or the API returns 400. */
   reasoning_content?: string;
@@ -30,6 +40,11 @@ export interface ToolContext {
   /** working directory for shell/file tools */
   cwd: string;
   signal?: AbortSignal;
+  /** Code-level authorization hook (group isolation / exact one-shot approval). */
+  authorizeTool?: (
+    toolName: string,
+    args: Record<string, unknown>,
+  ) => { allowed: boolean; reason?: string };
   /** send a file from local disk to this chat. Implemented by the router. */
   sendFile?: (filePath: string, caption?: string) => Promise<string>;
   /** send a message to any known chat. Implemented by the router. */
@@ -91,7 +106,7 @@ export interface Channel {
   readonly name: string;
   start(): Promise<void>;
   stop(): Promise<void>;
-  sendText(chatId: string, text: string, replyTo?: string): Promise<void>;
+  sendText(chatId: string, text: string, replyTo?: string, signal?: AbortSignal): Promise<void>;
   sendFile(chatId: string, filePath: string, caption?: string): Promise<void>;
   isOwner(userId: string): boolean;
   addOwner(userId: string): void;

@@ -9,6 +9,7 @@
  */
 import type { AgentEvents, Msg, StreamFn, ToolCall, ToolContext, ToolDef } from "./types.ts";
 import { log, warn } from "./log.ts";
+import { validateSchema } from "./schema.ts";
 
 export interface AgentRunOptions {
   messages: Msg[]; // mutated: assistant + tool messages are appended
@@ -39,13 +40,16 @@ function preview(s: string, n = 200): string {
   return oneLine.length > n ? oneLine.slice(0, n) + "…" : oneLine;
 }
 
-function parseArgs(raw: string): Record<string, unknown> {
-  if (!raw.trim()) return {};
+function parseArgs(raw: string): { args: Record<string, unknown>; error?: string } {
+  if (!raw.trim()) return { args: {} };
   try {
     const v = JSON.parse(raw);
-    return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : { _: v };
+    if (!v || typeof v !== "object" || Array.isArray(v)) {
+      return { args: {}, error: "tool arguments must be a JSON object" };
+    }
+    return { args: v as Record<string, unknown> };
   } catch {
-    return { _raw: raw };
+    return { args: {}, error: "tool arguments are not valid JSON" };
   }
 }
 
@@ -53,10 +57,18 @@ async function executeTool(
   call: ToolCall,
   tools: ToolDef[],
   ctx: ToolContext,
+  parsed = parseArgs(call.function.arguments),
 ): Promise<string> {
   const tool = tools.find((t) => t.name === call.function.name);
   if (!tool) return `Error: unknown tool "${call.function.name}"`;
-  const args = parseArgs(call.function.arguments);
+  if (parsed.error) return `Error: ${parsed.error}`;
+  const args = parsed.args;
+  const schemaError = validateSchema(args, tool.parameters);
+  if (schemaError) return `Error: invalid tool arguments: ${schemaError}`;
+  const authorization = ctx.authorizeTool?.(tool.name, args);
+  if (authorization && !authorization.allowed) {
+    return `Error: ${authorization.reason ?? `tool ${tool.name} is not authorized`}`;
+  }
   try {
     const out = await tool.execute(args, ctx);
     return out === "" ? "(no output)" : out;
@@ -149,10 +161,10 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentRunResult> {
         });
         continue;
       }
-      const args = parseArgs(call.function.arguments);
-      events?.onToolStart?.(call.function.name, args);
-      log("agent", `tool → ${call.function.name}(${preview(JSON.stringify(args), 160)})`);
-      const out = await executeTool(call, tools, ctx);
+      const parsed = parseArgs(call.function.arguments);
+      events?.onToolStart?.(call.function.name, parsed.args);
+      log("agent", `tool → ${call.function.name}(${preview(call.function.arguments, 160)})`);
+      const out = await executeTool(call, tools, ctx, parsed);
       events?.onToolEnd?.(call.function.name, !out.startsWith("Error:"), preview(out));
       messages.push({
         role: "tool",

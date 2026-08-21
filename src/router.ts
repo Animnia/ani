@@ -9,14 +9,14 @@ import { join } from "node:path";
 import { loadConfig, PATHS, watchConfig, type Config } from "./core/config.ts";
 import { approveCode, loadPending, PAIR_RENOTIFY, savePending, upsertPending } from "./core/pairing.ts";
 import { sweepDataDirs } from "./core/janitor.ts";
-import { createDeepSeekStream } from "./core/deepseek.ts";
+import { createDeepSeekStream, detectImageMime } from "./core/deepseek.ts";
 import { runAgent } from "./core/agent.ts";
 import { SessionStore } from "./core/session.ts";
 import { buildSystemPrompt } from "./core/persona.ts";
 import { listSkills, setSkillEnabled, skillDirs, type SkillStatus } from "./core/skills.ts";
 import { Queue } from "./core/net.ts";
 import { log, warn } from "./core/log.ts";
-import type { Channel, InboundEvent, Msg, StreamFn, ToolDef } from "./core/types.ts";
+import type { Channel, ImageInput, InboundEvent, Msg, StreamFn, ToolDef } from "./core/types.ts";
 import { TelegramChannel } from "./channels/telegram.ts";
 import { QQChannel } from "./channels/qq.ts";
 import { shellTool } from "./tools/shell.ts";
@@ -27,12 +27,16 @@ import { browserTool } from "./tools/browser.ts";
 import { CronService, makeCronTool, type CronTask } from "./tools/cron.ts";
 import { makeMessagingTools, type MessagingBridge } from "./tools/messaging.ts";
 import { McpManager } from "./tools/mcp.ts";
+import { ToolPolicy, type ToolMode } from "./core/tool-policy.ts";
 
 interface ChatEntry {
   chatKey: string;
   channel: string;
   chatId: string;
   hint?: string;
+  /** true = public group, false = verified private, undefined = legacy/unknown.
+   *  Unknown is always treated as public by background delivery paths. */
+  isGroup?: boolean;
 }
 
 export class Router implements MessagingBridge {
@@ -42,8 +46,12 @@ export class Router implements MessagingBridge {
   private channels = new Map<string, Channel>();
   private queues = new Map<string, Queue>();
   private running = new Map<string, AbortController>();
+  /** Monotonic per-chat generation. Queued/running turns from an older
+   *  generation are discarded when a newer message or /new arrives. */
+  private generations = new Map<string, number>();
   private cron!: CronService;
   private mcp = new McpManager();
+  private toolPolicy = new ToolPolicy();
   private tools: ToolDef[] = [];
   private chats = new Map<string, ChatEntry>();
   private chatsFile = joinData("chats.json");
@@ -182,6 +190,24 @@ export class Router implements MessagingBridge {
     return q;
   }
 
+  /** Invalidate pending work and cancel the active run for this chat. */
+  private nextGeneration(chatKey: string, preserveApprovalToken?: string): number {
+    this.toolPolicy.invalidate(chatKey, preserveApprovalToken);
+    const generation = (this.generations.get(chatKey) ?? 0) + 1;
+    this.generations.set(chatKey, generation);
+    this.running.get(chatKey)?.abort();
+    return generation;
+  }
+
+  private isCurrent(chatKey: string, generation: number): boolean {
+    return this.generations.get(chatKey) === generation;
+  }
+
+  private authorizeTools(chatKey: string, mode: ToolMode, attemptId: string) {
+    return (toolName: string, args: Record<string, unknown>) =>
+      this.toolPolicy.authorize(chatKey, mode, toolName, args, attemptId);
+  }
+
   private async handleInbound(evt: InboundEvent): Promise<void> {
     const channel = this.channels.get(evt.channel);
     if (!channel) return;
@@ -192,30 +218,80 @@ export class Router implements MessagingBridge {
       return;
     }
 
-    this.rememberChat(chatKey, evt.channel, evt.chatId, evt.userName ?? evt.userId);
+    this.rememberChat(chatKey, evt.channel, evt.chatId, evt.userName ?? evt.userId, evt.isGroup === true);
 
     // in-channel slash commands (owner-only — we passed the gate above).
     // Only KNOWN commands are intercepted; other "/..." text (linux paths,
     // model shorthand) flows to the agent as usual.
-    if (evt.text.trim().startsWith("/")) {
-      const reply = this.channelCommand(chatKey, evt.text.trim());
-      if (reply !== null) {
-        await channel.sendText(evt.chatId, reply);
+    let text = evt.text;
+    let generation: number | undefined;
+    const commandText = text.trim();
+    if (commandText.startsWith("/")) {
+      const [command, arg = ""] = commandText.slice(1).split(/\s+/);
+      if (command === "confirm") {
+        if (evt.isGroup) {
+          await channel.sendText(evt.chatId, "群聊中不能批准高权限操作，请在私聊中继续。");
+          return;
+        }
+        if (!this.toolPolicy.canConfirm(chatKey, arg)) {
+          await channel.sendText(evt.chatId, "确认码无效、已过期，或不属于当前会话。请重新发起操作。");
+          return;
+        }
+        generation = this.nextGeneration(chatKey, arg);
+        const approval = this.toolPolicy.confirm(chatKey, arg, String(generation));
+        if (!approval) return; // synchronous defensive check
+        // Let the model resume from the denied tool result already in history.
+        // The grant is bound to this generation + exact arguments + one use.
+        text = `[Owner confirmed code-verified ${approval.toolName} with /confirm ${arg}. Retry only the exact same tool call now.]`;
+      } else if (command === "new") {
+        // /new is a chat barrier: invalidate the active generation now, then
+        // reset and acknowledge inside the same queue. A following message
+        // therefore cannot race ahead of the reset.
+        try {
+          await this.queueReset(chatKey, () =>
+            channel.sendText(evt.chatId, "新会话已开始（旧会话已归档）🌱").catch((e) => {
+              warn("router", `reset acknowledgement ${chatKey} failed: ${e instanceof Error ? e.message : e}`);
+            }),
+          );
+        } catch (e) {
+          warn("router", `reset ${chatKey} failed: ${e instanceof Error ? e.message : e}`);
+          await channel.sendText(evt.chatId, "旧会话归档失败，已取消重置；历史仍完整保留。请检查本地日志后重试。").catch(() => {});
+        }
         return;
+      } else {
+        // Any owner intent other than the exact /confirm revokes stale codes.
+        this.toolPolicy.invalidate(chatKey);
+        const reply = this.channelCommand(chatKey, commandText, { isGroup: evt.isGroup === true });
+        if (reply !== null) {
+          await channel.sendText(evt.chatId, reply);
+          return;
+        }
       }
     }
 
-    let text = evt.text;
-    if (evt.files?.length) {
-      const lines = evt.files.map((f) => `[收到文件] ${f.name} (${f.size} bytes) 已保存到 ${f.path}`);
+    const attachments = (evt.files ?? []).map((file) => ({ ...file, mime: detectInboundImage(file.path) }));
+    const images: ImageInput[] = attachments
+      .filter((file) => file.mime !== null)
+      .map((file) => ({ path: file.path, detail: "auto" }));
+    if (attachments.length) {
+      const lines = attachments.map((file) => {
+        const kind = file.mime ? "图片" : "文件";
+        return evt.isGroup
+          ? `[收到${kind}] ${file.name} (${file.size} bytes)`
+          : `[收到${kind}] ${file.name} (${file.size} bytes) 已保存到 ${file.path}`;
+      });
+      if (!text.trim() && images.length) text = "请识别并描述我发来的图片。";
       text = text ? `${text}\n\n${lines.join("\n")}` : lines.join("\n");
     }
     if (evt.isGroup && evt.userName) text = `${evt.userName}: ${text}`;
     if (!text.trim()) return;
 
-    // abort any stale run for this chat — newest message wins
-    this.running.get(chatKey)?.abort();
-    void this.queueFor(chatKey).push(() => this.runChat(chatKey, text, { isGroup: evt.isGroup === true }));
+    // Invalidate both the active run and older queued turns. The generation
+    // check at task start makes newest-wins hold even for synchronous bursts.
+    generation ??= this.nextGeneration(chatKey);
+    void this.queueFor(chatKey).push(() =>
+      this.runChat(chatKey, text, generation!, { isGroup: evt.isGroup === true, images }),
+    );
   }
 
   private async handlePairing(channel: Channel, evt: InboundEvent): Promise<void> {
@@ -251,10 +327,20 @@ export class Router implements MessagingBridge {
 
   /** Slash commands available inside QQ/Telegram chats. Returns the reply
    *  text, or null when the text isn't a known command (pass to agent). */
-  private channelCommand(chatKey: string, text: string): string | null {
+  private channelCommand(chatKey: string, text: string, opts: { isGroup?: boolean } = {}): string | null {
     const [cmd] = text.slice(1).split(/\s+/);
     switch (cmd) {
       case "help":
+        if (opts.isGroup) {
+          return [
+            "群聊可用命令：",
+            "/new     开启全新群聊会话",
+            "/status  查看当前群聊会话状态",
+            "/model   查看当前模型",
+            "/help    本帮助",
+            "隐私文件、全局技能、已知会话和机器工具只在私聊中可用。",
+          ].join("\n");
+        }
         return [
           "可用命令：",
           "/new     开启全新会话（旧会话归档保留）",
@@ -263,12 +349,10 @@ export class Router implements MessagingBridge {
           "/model   查看当前模型",
           "/skills [on|off <名>]  查看 / 启用 / 禁用技能",
           "/show <memory|user|persona>  查看记忆 / 用户资料 / 人设文件",
+          "/confirm <code>  批准一次完全相同的高权限工具调用",
           "/help    本帮助",
           "其它内容直接发给 ani 即可。",
         ].join("\n");
-      case "new":
-        this.resetSession(chatKey);
-        return "新会话已开始（旧会话已归档）🌱";
       case "status": {
         const s = this.sessionStatus(chatKey);
         const pct = s.maxChars ? Math.round((s.chars / s.maxChars) * 100) : 0;
@@ -282,15 +366,18 @@ export class Router implements MessagingBridge {
         ].join("\n");
       }
       case "chats":
+        if (opts.isGroup) return "群聊中已禁用 /chats，请在私聊中查看。";
         return this.listChats().map((c) => `${c.chatKey}${c.hint ? `（${c.hint}）` : ""}`).join("\n");
       case "model":
         return `当前模型：${this.cfg.model}（改 ani.json 的 model 字段即热更新）`;
       case "skills": {
+        if (opts.isGroup) return "群聊中已禁用 /skills，请在私聊中管理全局技能。";
         const arg = text.split(/\s+/).slice(1);
         if (arg.length === 2 && (arg[0] === "on" || arg[0] === "off")) return this.skillToggle(arg[1], arg[0] === "on");
         return this.skillsOverview();
       }
       case "show": {
+        if (opts.isGroup) return "群聊中已禁用 /show，请在私聊中查看私人资料。";
         const which = text.split(/\s+/)[1] ?? "";
         return this.showFile(which);
       }
@@ -358,23 +445,51 @@ export class Router implements MessagingBridge {
 
   // ------------------------------------------------------------ agent run
 
-  private async runChat(chatKey: string, userText: string, opts?: { isGroup?: boolean }): Promise<void> {
+  private async runChat(
+    chatKey: string,
+    userText: string,
+    generation: number,
+    opts?: { isGroup?: boolean; images?: ImageInput[] },
+  ): Promise<void> {
+    // This turn may have gone stale while waiting behind an active run.
+    if (!this.isCurrent(chatKey, generation)) return;
+    // Sessions created by older ani versions may contain replies produced
+    // with private prompts/tools. Archive that legacy history once instead
+    // of ever replaying it inside the new hard-isolated group context.
+    if (opts?.isGroup && this.sessions.get(chatKey).some((message) => message._meta?.groupSafe !== true)) {
+      try {
+        this.sessions.reset(chatKey, { archive: true });
+      } catch (e) {
+        warn("router", `group migration ${chatKey} failed: ${e instanceof Error ? e.message : e}`);
+        await this.deliver(chatKey, "群聊历史安全迁移失败，本条消息未处理；请检查本地日志后重试。").catch(() => {});
+        return;
+      }
+    }
+    const snapshot = this.sessions.snapshot(chatKey);
+    let rollbackAttempted = false;
+    const rollback = () => {
+      if (rollbackAttempted) return;
+      rollbackAttempted = true;
+      this.sessions.restore(chatKey, snapshot);
+    };
     const controller = new AbortController();
     this.running.set(chatKey, controller);
     const [channelName, chatId] = splitChatKey(chatKey);
     try {
-      this.sessions.append(chatKey, { role: "user", content: userText, _meta: { ts: Date.now() } });
+      this.sessions.append(chatKey, {
+        role: "user",
+        content: userText,
+        ...(opts?.images?.length ? { images: opts.images } : {}),
+        _meta: { ts: Date.now(), ...(opts?.isGroup ? { groupSafe: true } : {}) },
+      });
       await this.sessions.maybeCompact(chatKey, this.streamFn, this.cfg.model);
-
-      let prompt = buildSystemPrompt();
-      if (opts?.isGroup) {
-        // privacy guard: group replies are visible to every member — the
-        // agent must not spill memory/files/personal data there
-        prompt +=
-          "\n\n<group_chat_notice>\nThis message came from a GROUP chat. Everyone in the group can read your replies. " +
-          "Do NOT reveal private data here: no memory contents, file contents, personal info, credentials, system paths/details beyond the obvious. " +
-          "If fulfilling the request needs private data, say so and ask the owner to continue in a private chat (DM) instead. Keep group replies short.\n</group_chat_notice>";
+      if (!this.isCurrent(chatKey, generation) || controller.signal.aborted) {
+        rollback();
+        return;
       }
+
+      const mode: ToolMode = opts?.isGroup ? "group" : "private";
+      const prompt = buildSystemPrompt({ mode: opts?.isGroup ? "group" : "private" });
       const system: Msg = { role: "system", content: prompt };
       const history = this.sessions.get(chatKey);
       const wire: Msg[] = [system, ...history];
@@ -382,7 +497,7 @@ export class Router implements MessagingBridge {
 
       const result = await runAgent({
         messages: wire,
-        tools: this.tools,
+        tools: this.toolPolicy.toolsForMode(this.tools, mode),
         streamFn: this.streamFn,
         model: this.cfg.model,
         maxTokens: this.cfg.maxTokens,
@@ -393,29 +508,66 @@ export class Router implements MessagingBridge {
           chatId,
           cwd: PATHS.root,
           signal: controller.signal,
+          authorizeTool: this.authorizeTools(chatKey, mode, String(generation)),
         },
       });
 
-      for (const m of wire.slice(before)) this.sessions.append(chatKey, m);
+      // A provider is allowed to ignore AbortSignal. Generation is therefore
+      // the authority: stale output must never reach storage or the channel.
+      if (!this.isCurrent(chatKey, generation) || controller.signal.aborted || result.aborted) {
+        rollback();
+        return;
+      }
+      for (const m of wire.slice(before)) {
+        if (opts?.isGroup) m._meta = { ...(m._meta ?? { ts: Date.now() }), groupSafe: true };
+        this.sessions.append(chatKey, m);
+      }
       this.recordUsage(chatKey, result.usage);
 
-      const reply = result.text.trim();
+      const notice = this.approvalNotice(chatKey);
+      // Once a privileged call is pending, do not let model-authored prose
+      // describe its risk. Only the code-generated exact arguments are shown.
+      const reply = notice || result.text.trim();
       if (!reply) return;
-      if (result.aborted) return; // superseded by a newer message — stay silent
-      await this.deliver(chatKey, reply);
+      await this.deliver(chatKey, reply, controller.signal);
+      // sendText can be slow enough for a newer inbound event to arrive.
+      if (!this.isCurrent(chatKey, generation) || controller.signal.aborted) rollback();
     } catch (e) {
+      if (!this.isCurrent(chatKey, generation) || controller.signal.aborted) {
+        rollback();
+        return;
+      }
       const msg = e instanceof Error ? e.message : String(e);
       warn("router", `runChat ${chatKey} failed: ${msg}`);
-      if (!controller.signal.aborted) {
-        await this.deliver(chatKey, `出错了: ${msg.slice(0, 300)}`).catch(() => {});
-      }
+      // Provider, attachment and tool errors may contain local paths, URLs or
+      // credentials. A public group gets a fixed message; details stay in the
+      // local log. Private owner chats keep the useful diagnostic excerpt.
+      const reply = opts?.isGroup
+        ? "处理这条群聊消息时发生错误，请稍后重试，或在私聊中继续。"
+        : `出错了: ${msg.slice(0, 300)}`;
+      await this.deliver(chatKey, reply, controller.signal).catch(() => {});
     } finally {
+      this.toolPolicy.finishAttempt(chatKey, String(generation));
       // defensive: only remove if this run is still the registered one
       if (this.running.get(chatKey) === controller) this.running.delete(chatKey);
     }
   }
 
-  private async deliver(chatKey: string, text: string): Promise<void> {
+  private approvalNotice(chatKey: string): string {
+    const pending = this.toolPolicy.pendingForChat(chatKey);
+    if (!pending.length) return "";
+    return [
+      "🔒 ANI 代码级安全确认（以下参数由程序生成，不由模型解释）：",
+      ...pending.flatMap((item) => [
+        `工具：${item.toolName}`,
+        `参数：${item.argsPreview}`,
+        `校验：sha256:${item.argsDigest}`,
+        `批准：/confirm ${item.token}（10 分钟内、仅当前会话、仅一次）`,
+      ]),
+    ].join("\n");
+  }
+
+  private async deliver(chatKey: string, text: string, signal?: AbortSignal): Promise<void> {
     const [channelName, chatId] = splitChatKey(chatKey);
     if (channelName === "cli") {
       process.stdout.write(`\nani> ${text}\n\n`);
@@ -423,7 +575,7 @@ export class Router implements MessagingBridge {
     }
     const ch = this.channels.get(channelName);
     if (!ch) throw new Error(`channel ${channelName} not connected`);
-    await ch.sendText(chatId, text);
+    await ch.sendText(chatId, text, undefined, signal);
   }
 
   // ------------------------------------------------------------------ cron
@@ -433,18 +585,28 @@ export class Router implements MessagingBridge {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10 * 60_000);
     try {
+      // Cron is unattended and therefore never receives private context or
+      // machine-control tools, even when its delivery target is a private
+      // chat. This single public mode is deliberately easier to audit.
+      const mode: ToolMode = "cron";
+      if (this.sessions.get(chatKey).some((message) => message._meta?.groupSafe !== true)) {
+        this.sessions.reset(chatKey, { archive: true });
+      }
       this.sessions.append(chatKey, {
         role: "user",
         content: `[定时任务触发] ${task.prompt}`,
-        _meta: { ts: Date.now(), internal: true },
+        _meta: { ts: Date.now(), internal: true, groupSafe: true },
       });
       await this.sessions.maybeCompact(chatKey, this.streamFn, this.cfg.model);
-      const wire: Msg[] = [{ role: "system", content: buildSystemPrompt() }, ...this.sessions.get(chatKey)];
+      const wire: Msg[] = [
+        { role: "system", content: buildSystemPrompt({ mode: "cron" }) },
+        ...this.sessions.get(chatKey),
+      ];
       const before = wire.length;
       const [targetChannel, targetChatId] = splitChatKey(task.target);
       const result = await runAgent({
         messages: wire,
-        tools: this.tools,
+        tools: this.toolPolicy.toolsForMode(this.tools, mode),
         streamFn: this.streamFn,
         model: this.cfg.model,
         maxTokens: this.cfg.maxTokens,
@@ -452,14 +614,24 @@ export class Router implements MessagingBridge {
         // ctx points at the DELIVERY TARGET (not the cron session) so that
         // send_message/send_file without an explicit chatKey land where the
         // report goes — previously they errored on the unknown "cron" channel
-        ctx: { chatKey: task.target, channel: targetChannel, chatId: targetChatId, cwd: PATHS.root, signal: controller.signal },
+        ctx: {
+          chatKey: task.target,
+          channel: targetChannel,
+          chatId: targetChatId,
+          cwd: PATHS.root,
+          signal: controller.signal,
+          authorizeTool: this.authorizeTools(task.target, mode, `cron:${task.id}`),
+        },
       });
-      for (const m of wire.slice(before)) this.sessions.append(chatKey, m);
+      for (const m of wire.slice(before)) {
+        m._meta = { ...(m._meta ?? { ts: Date.now() }), groupSafe: true };
+        this.sessions.append(chatKey, m);
+      }
       this.recordUsage(chatKey, result.usage);
       const text = result.text.trim() || "(任务完成，无输出)";
       task.lastResult = text.slice(0, 200);
       if (task.target && this.channels.has(targetChannel)) {
-        await this.deliver(task.target, `⏰ ${task.name}\n\n${text}`);
+        await this.deliver(task.target, `⏰ ${task.name}\n\n${text}`, controller.signal);
       } else {
         process.stdout.write(`\n[cron ${task.name}]\n${text}\n\n`);
       }
@@ -505,38 +677,130 @@ export class Router implements MessagingBridge {
     onReasoning?: (d: string) => void,
   ): Promise<string> {
     const chatKey = "cli:local";
-    this.sessions.append(chatKey, { role: "user", content: text, _meta: { ts: Date.now() } });
-    await this.sessions.maybeCompact(chatKey, this.streamFn, this.cfg.model);
-    const wire: Msg[] = [{ role: "system", content: buildSystemPrompt() }, ...this.sessions.get(chatKey)];
-    const before = wire.length;
-    const result = await runAgent({
-      messages: wire,
-      tools: this.tools,
-      streamFn: this.streamFn,
-      model: this.cfg.model,
-      maxTokens: this.cfg.maxTokens,
-      ctx: { chatKey, channel: "cli", chatId: "local", cwd: PATHS.root },
-      events: {
-        onTextDelta: onDelta,
-        onReasoningDelta: onReasoning,
-        onToolStart: onToolStart ?? ((name) => process.stdout.write(`\n\x1b[90m⚙ ${name}...\x1b[0m`)),
-        onToolEnd: (name, ok, preview) => onTool(name, ok, preview),
-      },
+    let userText = text;
+    let generation: number;
+    const confirmation = /^\/confirm\s+(\S+)\s*$/i.exec(text.trim());
+    if (confirmation) {
+      const token = confirmation[1];
+      if (!this.toolPolicy.canConfirm(chatKey, token)) {
+        const message = "确认码无效、已过期，或不属于当前会话。请重新发起操作。";
+        onDelta(message);
+        return message;
+      }
+      generation = this.nextGeneration(chatKey, token);
+      const approval = this.toolPolicy.confirm(chatKey, token, String(generation));
+      if (!approval) return "";
+      userText = `[Owner confirmed code-verified ${approval.toolName} with /confirm ${token}. Retry only the exact same tool call now.]`;
+    } else {
+      generation = this.nextGeneration(chatKey);
+    }
+    return this.queueFor(chatKey).push(async () => {
+      if (!this.isCurrent(chatKey, generation)) return "";
+      const snapshot = this.sessions.snapshot(chatKey);
+      let rollbackAttempted = false;
+      const rollback = () => {
+        if (rollbackAttempted) return;
+        rollbackAttempted = true;
+        this.sessions.restore(chatKey, snapshot);
+      };
+      const controller = new AbortController();
+      this.running.set(chatKey, controller);
+      const active = () => this.isCurrent(chatKey, generation) && !controller.signal.aborted;
+      try {
+        this.sessions.append(chatKey, { role: "user", content: userText, _meta: { ts: Date.now() } });
+        await this.sessions.maybeCompact(chatKey, this.streamFn, this.cfg.model);
+        if (!active()) {
+          rollback();
+          return "";
+        }
+        const wire: Msg[] = [{ role: "system", content: buildSystemPrompt() }, ...this.sessions.get(chatKey)];
+        const before = wire.length;
+        const result = await runAgent({
+          messages: wire,
+          tools: this.tools,
+          streamFn: this.streamFn,
+          model: this.cfg.model,
+          maxTokens: this.cfg.maxTokens,
+          signal: controller.signal,
+          ctx: {
+            chatKey,
+            channel: "cli",
+            chatId: "local",
+            cwd: PATHS.root,
+            signal: controller.signal,
+            authorizeTool: this.authorizeTools(chatKey, "cli", String(generation)),
+          },
+          events: {
+            onTextDelta: (d) => {
+              if (active() && !this.toolPolicy.hasPending(chatKey)) onDelta(d);
+            },
+            onReasoningDelta: (d) => {
+              if (active() && !this.toolPolicy.hasPending(chatKey)) onReasoning?.(d);
+            },
+            onToolStart: (name) => {
+              if (!active()) return;
+              (onToolStart ?? ((n) => process.stdout.write(`\n\x1b[90m⚙ ${n}...\x1b[0m`)))(name);
+            },
+            onToolEnd: (name, ok, preview) => active() && onTool(name, ok, preview),
+          },
+        });
+        if (!active() || result.aborted) {
+          rollback();
+          return "";
+        }
+        for (const m of wire.slice(before)) this.sessions.append(chatKey, m);
+        this.recordUsage(chatKey, result.usage);
+        const notice = this.approvalNotice(chatKey);
+        if (notice) onDelta(notice);
+        return notice || result.text;
+      } catch (e) {
+        if (!active()) {
+          rollback();
+          return "";
+        }
+        throw e;
+      } finally {
+        this.toolPolicy.finishAttempt(chatKey, String(generation));
+        if (this.running.get(chatKey) === controller) this.running.delete(chatKey);
+      }
     });
-    for (const m of wire.slice(before)) this.sessions.append(chatKey, m);
-    this.recordUsage(chatKey, result.usage);
-    return result.text;
   }
 
-  resetSession(chatKey: string): void {
-    this.sessions.reset(chatKey, { archive: true });
+  /** Queue a reset behind the active turn after invalidating it immediately. */
+  private queueReset(chatKey: string, afterReset?: () => Promise<void>): Promise<void> {
+    this.nextGeneration(chatKey);
+    return this.queueFor(chatKey).push(async () => {
+      this.sessions.reset(chatKey, { archive: true });
+      await afterReset?.();
+    });
+  }
+
+  resetSession(chatKey: string): Promise<void> {
+    return this.queueReset(chatKey);
+  }
+
+  cancelToolApprovals(chatKey: string): void {
+    this.toolPolicy.invalidate(chatKey);
   }
 
   // ------------------------------------------------------------- registry
 
-  private rememberChat(chatKey: string, channel: string, chatId: string, hint?: string): void {
-    if (this.chats.has(chatKey)) return;
-    this.chats.set(chatKey, { chatKey, channel, chatId, hint });
+  private rememberChat(chatKey: string, channel: string, chatId: string, hint?: string, isGroup?: boolean): void {
+    const existing = this.chats.get(chatKey);
+    if (existing) {
+      // Public wins on any classification conflict. This prevents a channel
+      // ID collision or malformed later event from downgrading a known group
+      // into a private target for background tasks.
+      const nextVisibility = existing.isGroup === true || isGroup === true
+        ? true
+        : isGroup === false
+          ? false
+          : existing.isGroup;
+      if (nextVisibility === existing.isGroup) return;
+      existing.isGroup = nextVisibility;
+    } else {
+      this.chats.set(chatKey, { chatKey, channel, chatId, hint, ...(isGroup === undefined ? {} : { isGroup }) });
+    }
     try {
       writeFileSync(this.chatsFile, JSON.stringify([...this.chats.values()], null, 2));
     } catch {
@@ -564,4 +828,12 @@ function splitChatKey(chatKey: string): [string, string] {
 
 function joinData(name: string): string {
   return `${PATHS.data}/${name}`;
+}
+
+function detectInboundImage(path: string): ReturnType<typeof detectImageMime> {
+  try {
+    return detectImageMime(path);
+  } catch {
+    return null;
+  }
 }

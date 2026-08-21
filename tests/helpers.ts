@@ -13,6 +13,8 @@ export const IS_WIN = process.platform === "win32";
  */
 export function hasLiveCredentials(): boolean {
   try {
+    const envKey = process.env.DEEPSEEK_API_KEY ?? "";
+    if (/^sk-[0-9a-z]{20,}$/i.test(envKey) && !envKey.includes("xxxx")) return true;
     if (!existsSync(PATHS.configFile)) return false;
     const cfg = JSON.parse(readFileSync(PATHS.configFile, "utf8"));
     const key: string = cfg?.deepseek?.apiKey ?? "";

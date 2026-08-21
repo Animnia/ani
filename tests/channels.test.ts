@@ -4,9 +4,9 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { chunkText, DedupSet } from "../src/channels/base.ts";
 import { QQChannel } from "../src/channels/qq.ts";
 import { TelegramChannel } from "../src/channels/telegram.ts";
@@ -80,6 +80,52 @@ test("QQ group @-message maps to group chat", { timeout: 10_000 }, async () => {
   assert.equal(events[0].userId, "MEMBER1");
   assert.equal(events[0].isGroup, true);
   assert.equal((qq as any).chatTypes.get("GROUP9"), "group");
+});
+
+test("QQ attachment filenames cannot escape the per-chat inbox", { timeout: 5000 }, () => {
+  const root = mkdtempSync(join(tmpdir(), "ani-qq-attachment-"));
+  try {
+    const inbox = join(root, "inbox");
+    const qq = new QQChannel(
+      { enabled: false, appId: "x", clientSecret: "y", owners: [] },
+      () => {},
+      { typesFile: join(root, "types.json"), inboxDir: inbox },
+    );
+
+    for (const malicious of ["../../../escape.txt", "..\\..\\escape.txt"]) {
+      const target = (qq as any).attachmentTarget("USER1", malicious);
+      assert.equal(target.name, "escape.txt");
+      assert.equal(basename(target.path).endsWith("-escape.txt"), true);
+      assert.equal(dirname(target.path), resolve(inbox, "qq_USER1"));
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("QQ never downloads attachments before owner authorization", { timeout: 5000 }, async () => {
+  const events: InboundEvent[] = [];
+  const qq = makeQQ((event) => events.push(event));
+  let targetCalls = 0;
+  (qq as any).attachmentTarget = () => {
+    targetCalls++;
+    throw new Error("download path must not be prepared");
+  };
+  (qq as any).onPayload({
+    op: 0,
+    t: "C2C_MESSAGE_CREATE",
+    s: 9,
+    d: {
+      id: "unauthorized-file",
+      content: "",
+      author: { user_openid: "STRANGER" },
+      attachments: [{ filename: "photo.png", url: "https://example.invalid/photo.png" }],
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(targetCalls, 0);
+  assert.equal(events.length, 1, "file-only event still reaches Router pairing");
+  assert.equal(events[0].files, undefined);
 });
 
 test("QQ READY stores session id; hello triggers identify path", { timeout: 10_000 }, async () => {
@@ -158,6 +204,78 @@ test("TG sendText with markdown:false sends plain directly", { timeout: 10_000 }
   (tg as any).api = async (_m: string, body: any) => { sent.push(body); return {}; };
   await tg.sendText("c1", "**bold**");
   assert.equal(sent[0].parse_mode, undefined);
+});
+
+test("channel delivery checks cancellation before emitting a reply chunk", async () => {
+  const controller = new AbortController();
+  controller.abort();
+
+  const tg = makeTG([]);
+  let tgCalls = 0;
+  (tg as any).api = async () => { tgCalls++; return {}; };
+  await tg.sendText("c1", "stale", undefined, controller.signal);
+  assert.equal(tgCalls, 0);
+
+  const dir = mkdtempSync(join(tmpdir(), "ani-qq-"));
+  try {
+    const qq = new QQChannel(
+      { enabled: false, appId: "x", clientSecret: "y", owners: [] },
+      () => {},
+      { typesFile: join(dir, "types.json") },
+    );
+    let qqCalls = 0;
+    (qq as any).api = async () => { qqCalls++; return {}; };
+    await qq.sendText("U1", "stale", undefined, controller.signal);
+    assert.equal(qqCalls, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("TG never downloads attachments or sends typing before owner authorization", { timeout: 5000 }, async () => {
+  const events: InboundEvent[] = [];
+  const tg = new TelegramChannel({ enabled: false, token: "x", owners: [] }, (event) => events.push(event));
+  let downloadCalls = 0;
+  let apiCalls = 0;
+  (tg as any).downloadFile = async () => {
+    downloadCalls++;
+    throw new Error("must not download");
+  };
+  (tg as any).api = async () => {
+    apiCalls++;
+    return {};
+  };
+  await (tg as any).handleMessage({
+    message_id: 1,
+    from: { id: 99 },
+    chat: { id: 99, type: "private" },
+    photo: [{ file_id: "photo", width: 10, height: 10 }],
+  });
+  assert.equal(downloadCalls, 0);
+  assert.equal(apiCalls, 0, "typing is also gated");
+  assert.equal(events.length, 1, "file-only event still reaches Router pairing");
+  assert.equal(events[0].files, undefined);
+});
+
+test("TG attachment failures never expose token-bearing download errors", async () => {
+  const events: InboundEvent[] = [];
+  const secret = "123456:VERY_SECRET_BOT_TOKEN";
+  const tg = new TelegramChannel({ enabled: false, token: secret, owners: ["99"] }, (event) => events.push(event));
+  (tg as any).downloadFile = async () => {
+    throw new Error(`GET https://api.telegram.org/file/bot${secret}/photos/a.jpg failed`);
+  };
+  (tg as any).api = async () => ({});
+
+  await (tg as any).handleMessage({
+    message_id: 2,
+    from: { id: 99 },
+    chat: { id: 99, type: "private" },
+    photo: [{ file_id: "photo", width: 10, height: 10 }],
+  });
+
+  assert.equal(events.length, 1);
+  assert.match(events[0].text, /附件下载失败，请重试/);
+  assert.doesNotMatch(events[0].text, /VERY_SECRET|api\.telegram\.org/);
 });
 
 test("TG catch-up: stale downtime messages notify owners and get skipped", { timeout: 10_000 }, async () => {

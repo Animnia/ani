@@ -55,15 +55,45 @@ export class SessionStore {
     }
   }
 
+  /** Immutable turn snapshot used by the router's per-chat transaction. */
+  snapshot(chatKey: string): Msg[] {
+    return structuredClone(this.get(chatKey));
+  }
+
+  /** Atomically replace a transcript with a previously captured snapshot. */
+  restore(chatKey: string, messages: Msg[]): void {
+    const next = structuredClone(messages);
+    const f = this.fileFor(chatKey);
+    const tmp = f + ".restore.tmp";
+    try {
+      writeFileSync(tmp, next.length ? next.map((m) => JSON.stringify(m)).join("\n") + "\n" : "");
+      renameSync(tmp, f);
+      this.sessions.set(chatKey, next);
+    } catch (e) {
+      // Keep this process safe even if persistence failed; the next turn must
+      // not inherit a cancelled instruction from the in-memory transcript.
+      this.sessions.set(chatKey, next);
+      warn("session", `restore failed for ${f}:`, e);
+      throw e;
+    }
+  }
+
   reset(chatKey: string, opts?: { archive?: boolean }): void {
     const f = this.fileFor(chatKey);
+    // Load before deciding whether there is anything to archive. A freshly
+    // constructed store has an empty cache even when a transcript exists.
+    const messages = this.get(chatKey);
     // /new archives instead of wiping: the transcript is often the only
     // record of what was decided — keep it as <key>.<ts>.archive.jsonl
-    if (opts?.archive && existsSync(f) && (this.sessions.get(chatKey)?.length ?? 0) > 0) {
+    if (opts?.archive && existsSync(f) && messages.length > 0) {
       try {
         renameSync(f, f.replace(/\.jsonl$/, `.${Date.now()}.archive.jsonl`));
-      } catch {
-        /* fall through to plain truncate */
+      } catch (e) {
+        // Archiving is the safety contract of /new. Never turn an archive
+        // failure into a destructive truncate: keep both memory and disk on
+        // the old transcript and let the caller report/retry the reset.
+        warn("session", `archive failed for ${f}; reset cancelled:`, e);
+        throw e;
       }
     }
     this.sessions.set(chatKey, []);
@@ -143,7 +173,15 @@ export class SessionStore {
       const summary: Msg = {
         role: "user",
         content: `[earlier conversation summary]\n${res.content}\n[end of summary — the conversation continues below]`,
-        _meta: { ts: Date.now(), internal: true, compacted: old.length },
+        _meta: {
+          ts: Date.now(),
+          internal: true,
+          compacted: old.length,
+          // Group transcripts are already public-only. Preserve that proof on
+          // their summary so Router does not mistake a safe compaction for
+          // legacy private history on the next group turn.
+          ...(old.every((m) => m._meta?.groupSafe === true) ? { groupSafe: true } : {}),
+        },
       };
       const next = [summary, ...messages.slice(cut)];
       this.sessions.set(chatKey, next);

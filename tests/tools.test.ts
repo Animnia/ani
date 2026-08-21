@@ -67,6 +67,7 @@ test("memory write/search/read", { timeout: 10_000 }, async () => {
   assert.match(await memorySearchTool.execute({ query: marker }, ctx), new RegExp(marker));
   const list = await memoryReadTool.execute({ date: "list" }, ctx);
   assert.match(list, /\.md/);
+  assert.match(await memoryReadTool.execute({ date: "../../../PERSONA" }, ctx), /^Error: date must be/);
   // cleanup the test note
   const today = new Date().toISOString().slice(0, 10);
   const f = join(PATHS.memory, "notes", today + ".md");
