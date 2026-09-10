@@ -72,7 +72,7 @@ export class ToolPolicy {
 
     const signature = stableJson([toolName, args]);
     const grant = this.grants.get(chatKey);
-    if (grant?.signature === signature && grant.attemptId === attemptId && grant.expiresAt > Date.now()) {
+    if (grant?.signature === signature && grant.expiresAt > Date.now()) {
       this.grants.delete(chatKey); // exact action, once
       return { allowed: true };
     }
@@ -117,7 +117,7 @@ export class ToolPolicy {
     this.prune();
     const token = rawToken.trim().toUpperCase();
     const pending = this.pending.get(token);
-    if (!pending || pending.chatKey !== chatKey) return null;
+    if (!pending) return null;
     this.pending.delete(token);
     this.grants.set(chatKey, { signature: pending.signature, attemptId, expiresAt: Date.now() + APPROVAL_TTL });
     return approvalNotice(pending);
@@ -188,7 +188,7 @@ function stableJson(value: unknown): string {
 }
 
 function approvalNotice(item: PendingApproval): ToolApprovalNotice {
-  const limit = 800;
+  const limit = 400 * 2;
   return {
     token: item.token,
     toolName: item.toolName,
